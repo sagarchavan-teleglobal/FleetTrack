@@ -63,3 +63,15 @@ export interface FleetSummary {
   connectedDevices: number;
   disconnectedDevices: number;
 }
+
+// ─────────────────────────────────────────────
+// Request payloads
+// ─────────────────────────────────────────────
+
+export interface EquipmentCreatePayload {
+  id: string;
+  name: string;
+  equipment_type: EquipmentType;
+  latitude: number;
+  longitude: number;
+}

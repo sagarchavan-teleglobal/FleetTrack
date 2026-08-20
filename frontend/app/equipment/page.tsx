@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Truck, Search, Filter } from "lucide-react";
+import { Truck, Search, Filter, Plus } from "lucide-react";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorState from "@/components/ui/ErrorState";
 import EmptyState from "@/components/ui/EmptyState";
 import StatusBadge from "@/components/ui/StatusBadge";
+import AddEquipmentModal from "@/components/equipment/AddEquipmentModal";
 import { useEquipment } from "@/lib/hooks/useEquipment";
 import { useDevices } from "@/lib/hooks/useDevices";
 import Link from "next/link";
@@ -18,6 +19,7 @@ export default function EquipmentPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<EquipmentStatus | "all">("all");
   const [typeFilter, setTypeFilter] = useState<EquipmentType | "all">("all");
+  const [showAddModal, setShowAddModal] = useState(false);
 
   // Build device lookup by equipment_id
   const deviceMap = useMemo(
@@ -48,12 +50,27 @@ export default function EquipmentPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900">Equipment</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          All registered equipment and their current status
-        </p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Equipment</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            All registered equipment and their current status
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+        >
+          <Plus className="h-4 w-4" />
+          Add Equipment
+        </button>
       </div>
+
+      <AddEquipmentModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={refetch}
+      />
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-3">

@@ -9,7 +9,7 @@ from app.database import Base, engine
 from app.db_models import DeviceDB, EquipmentDB, TelemetryDB
 from app.dependencies import get_db
 from app.models import Equipment
-from app.schemas import Telemetry
+from app.schemas import Telemetry, EquipmentCreate, DeviceCreate
 from app.services.utilization import calculate_utilization
 
 
@@ -105,6 +105,85 @@ def get_equipment_by_id(
         )
 
     return equipment
+
+
+# --------------------------------------------------
+# Create Equipment
+# --------------------------------------------------
+
+@app.post("/equipment", response_model=Equipment)
+def create_equipment(
+    payload: EquipmentCreate,
+    db: Session = Depends(get_db)
+):
+
+    # Check if equipment ID already exists
+    existing = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.id == payload.id)
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="Equipment with this ID already exists"
+        )
+
+    equipment = EquipmentDB(
+        id=payload.id,
+        name=payload.name,
+        equipment_type=payload.equipment_type,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        speed=0.0,
+        engine_on=False,
+        status="stopped"
+    )
+
+    db.add(equipment)
+    db.commit()
+    db.refresh(equipment)
+
+    return equipment
+
+
+# --------------------------------------------------
+# Delete Equipment
+# --------------------------------------------------
+
+@app.delete("/equipment/{equipment_id}")
+def delete_equipment(
+    equipment_id: str,
+    db: Session = Depends(get_db)
+):
+
+    equipment = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.id == equipment_id)
+        .first()
+    )
+
+    if equipment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Equipment not found"
+        )
+
+    # Delete associated devices
+    db.query(DeviceDB).filter(
+        DeviceDB.equipment_id == equipment_id
+    ).delete()
+
+    # Delete associated telemetry
+    db.query(TelemetryDB).filter(
+        TelemetryDB.equipment_id == equipment_id
+    ).delete()
+
+    db.delete(equipment)
+    db.commit()
+
+    return {"message": f"Equipment {equipment_id} deleted"}
 
 
 # --------------------------------------------------
@@ -331,6 +410,57 @@ def get_device(
             status_code=404,
             detail="Device not found"
         )
+
+    return device
+
+
+# --------------------------------------------------
+# Create Device
+# --------------------------------------------------
+
+@app.post("/devices")
+def create_device(
+    payload: DeviceCreate,
+    db: Session = Depends(get_db)
+):
+
+    # Check if device ID already exists
+    existing = (
+        db.query(DeviceDB)
+        .filter(DeviceDB.device_id == payload.device_id)
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="Device with this ID already exists"
+        )
+
+    # Verify equipment exists
+    equipment = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.id == payload.equipment_id)
+        .first()
+    )
+
+    if equipment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Equipment not found"
+        )
+
+    device = DeviceDB(
+        device_id=payload.device_id,
+        equipment_id=payload.equipment_id,
+        connected=False,
+        last_seen=None,
+        signal_strength=0
+    )
+
+    db.add(device)
+    db.commit()
+    db.refresh(device)
 
     return device
 

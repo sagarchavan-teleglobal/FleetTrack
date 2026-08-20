@@ -3,6 +3,7 @@ import type {
   Device,
   TelemetryRecord,
   UtilizationResponse,
+  EquipmentCreatePayload,
 } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -21,13 +22,14 @@ class ApiError extends Error {
   }
 }
 
-async function fetchApi<T>(endpoint: string): Promise<T> {
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${BASE_URL}${endpoint}`;
 
   const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
     },
+    ...options,
   });
 
   if (!response.ok) {
@@ -51,6 +53,19 @@ export async function getEquipment(): Promise<Equipment[]> {
 
 export async function getEquipmentById(id: string): Promise<Equipment> {
   return fetchApi<Equipment>(`/equipment/${id}`);
+}
+
+export async function createEquipment(
+  payload: EquipmentCreatePayload
+): Promise<Equipment> {
+  return fetchApi<Equipment>("/equipment", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteEquipment(id: string): Promise<void> {
+  await fetchApi(`/equipment/${id}`, { method: "DELETE" });
 }
 
 // ─────────────────────────────────────────────
@@ -83,6 +98,16 @@ export async function getDevices(): Promise<Device[]> {
 
 export async function getDeviceById(deviceId: string): Promise<Device> {
   return fetchApi<Device>(`/devices/${deviceId}`);
+}
+
+export async function createDevice(
+  deviceId: string,
+  equipmentId: string
+): Promise<Device> {
+  return fetchApi<Device>("/devices", {
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, equipment_id: equipmentId }),
+  });
 }
 
 export { ApiError };

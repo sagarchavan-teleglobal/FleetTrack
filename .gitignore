@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment (exclude everything except the app code)
+backend/venv/Lib/
+backend/venv/Scripts/
+backend/venv/Include/
+backend/venv/pyvenv.cfg
+backend/venv/share/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

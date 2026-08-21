@@ -2,14 +2,51 @@
 Multi-Equipment GPS Simulator
 Simulates telemetry for all equipment in the fleet with varied behaviors,
 device disconnection events, and realistic movement patterns.
+
+Supports two modes:
+  - HTTP mode (default): POST directly to FastAPI backend
+  - MQTT mode: Publish to MQTT broker (bridge forwards to backend)
+
+Usage:
+    python gps_simulator.py              # HTTP mode
+    python gps_simulator.py --mqtt       # MQTT mode
 """
 
+import sys
 import time
+import math
 import random
+import json
 import requests
 from datetime import datetime
 
+# ─────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────
+
 API_URL = "http://127.0.0.1:8000/telemetry"
+MQTT_HOST = "localhost"
+MQTT_PORT = 1883
+USE_MQTT = "--mqtt" in sys.argv
+
+# ─────────────────────────────────────────────
+# MQTT setup (optional)
+# ─────────────────────────────────────────────
+
+mqtt_client = None
+
+if USE_MQTT:
+    try:
+        import paho.mqtt.client as mqtt
+        mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+        mqtt_client.loop_start()
+    except ImportError:
+        print("  ✗ paho-mqtt not installed. Run: pip install paho-mqtt")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  ✗ Cannot connect to MQTT broker: {e}")
+        sys.exit(1)
 
 # ─────────────────────────────────────────────
 # Equipment fleet configuration
@@ -64,12 +101,12 @@ def generate_telemetry(config):
     eq_id = config["equipment_id"]
     state = equipment_state[eq_id]
 
-    # Simulate random device disconnection (5% chance to disconnect, lasts 3-6 ticks)
+    # Simulate random device disconnection (5% chance, lasts 3-6 ticks)
     if state["is_disconnected"]:
         state["disconnected_ticks"] -= 1
         if state["disconnected_ticks"] <= 0:
             state["is_disconnected"] = False
-        return None  # No telemetry when disconnected
+        return None
 
     if random.random() < 0.05:
         state["is_disconnected"] = True
@@ -89,24 +126,21 @@ def generate_telemetry(config):
     if operational_state == "working":
         speed = random.uniform(config["max_speed"] * 0.4, config["max_speed"])
         engine_on = True
-        # Move in a somewhat realistic pattern
-        direction = random.uniform(0, 6.28)  # radians
-        import math
+        direction = random.uniform(0, 6.28)
         state["latitude"] += math.cos(direction) * config["drift_factor"]
         state["longitude"] += math.sin(direction) * config["drift_factor"]
 
     elif operational_state == "idle":
         speed = 0
         engine_on = True
-        # Tiny GPS drift when stationary
         state["latitude"] += random.uniform(-0.000005, 0.000005)
         state["longitude"] += random.uniform(-0.000005, 0.000005)
 
-    else:  # offline/stopped
+    else:
         speed = 0
         engine_on = False
 
-    # Signal strength varies
+    # Signal strength varies by state
     if operational_state == "working":
         signal = random.randint(70, 100)
     elif operational_state == "idle":
@@ -127,13 +161,36 @@ def generate_telemetry(config):
 
 
 # ─────────────────────────────────────────────
+# Send telemetry (HTTP or MQTT)
+# ─────────────────────────────────────────────
+
+def send_telemetry(telemetry):
+    """Send telemetry via HTTP or MQTT depending on mode."""
+    eq_id = telemetry["equipment_id"]
+
+    if USE_MQTT and mqtt_client:
+        topic = f"fleet/telemetry/{eq_id}"
+        payload = json.dumps(telemetry)
+        mqtt_client.publish(topic, payload, qos=1)
+        return "MQTT"
+    else:
+        response = requests.post(API_URL, json=telemetry)
+        return f"HTTP {response.status_code}"
+
+
+# ─────────────────────────────────────────────
 # Main loop
 # ─────────────────────────────────────────────
 
+mode_str = "MQTT" if USE_MQTT else "HTTP"
 print(f"═══════════════════════════════════════════════")
-print(f"  Fleet GPS Simulator")
+print(f"  Fleet GPS Simulator ({mode_str} mode)")
 print(f"  Tracking {len(FLEET)} equipment")
 print(f"  Sending telemetry every 5 seconds")
+if USE_MQTT:
+    print(f"  Broker: {MQTT_HOST}:{MQTT_PORT}")
+else:
+    print(f"  API: {API_URL}")
 print(f"═══════════════════════════════════════════════")
 print()
 
@@ -145,7 +202,6 @@ while True:
         telemetry = generate_telemetry(config)
 
         if telemetry is None:
-            # Device is disconnected
             remaining = state["disconnected_ticks"]
             print(
                 f"  [{eq_id}] ⚠ DISCONNECTED"
@@ -154,7 +210,7 @@ while True:
             continue
 
         try:
-            response = requests.post(API_URL, json=telemetry)
+            result = send_telemetry(telemetry)
 
             status_str = (
                 "WORKING" if telemetry["engine_on"] and telemetry["speed"] > 0
@@ -168,11 +224,13 @@ while True:
                 f" | Lon: {telemetry['longitude']:.6f}"
                 f" | Speed: {telemetry['speed']:5.1f}"
                 f" | Signal: {telemetry['signal_strength']}%"
-                f" | HTTP {response.status_code}"
+                f" | {result}"
             )
 
         except requests.exceptions.RequestException as e:
             print(f"  [{eq_id}] ✗ Connection error: {e}")
+        except Exception as e:
+            print(f"  [{eq_id}] ✗ Error: {e}")
 
     print(f"  {'─' * 60}")
     time.sleep(5)

@@ -1,8 +1,10 @@
 from datetime import datetime
+from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,38 @@ from app.models import Equipment
 from app.schemas import Telemetry, EquipmentCreate, DeviceCreate
 from app.services.utilization import calculate_utilization
 from app.services.alerts import check_alerts
+
+
+# ─────────────────────────────────────────────
+# WebSocket connection manager
+# ─────────────────────────────────────────────
+
+class ConnectionManager:
+    """Manages active WebSocket connections for broadcasting."""
+
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, data: dict):
+        """Broadcast JSON data to all connected clients."""
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(data)
+            except Exception:
+                disconnected.append(connection)
+        for conn in disconnected:
+            self.active_connections.remove(conn)
+
+
+ws_manager = ConnectionManager()
 
 
 app = FastAPI(
@@ -310,6 +344,28 @@ def receive_telemetry(
     db.refresh(equipment)
     db.refresh(device)
     db.refresh(telemetry_record)
+
+    # Broadcast via WebSocket (fire-and-forget)
+    import asyncio
+
+    ws_payload = {
+        "type": "telemetry",
+        "equipment_id": telemetry.equipment_id,
+        "device_id": telemetry.device_id,
+        "latitude": telemetry.latitude,
+        "longitude": telemetry.longitude,
+        "speed": telemetry.speed,
+        "engine_on": telemetry.engine_on,
+        "status": status,
+        "signal_strength": telemetry.signal_strength,
+        "timestamp": telemetry.timestamp.isoformat(),
+    }
+
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(ws_manager.broadcast(ws_payload))
+    except RuntimeError:
+        pass  # No event loop (shouldn't happen with uvicorn)
 
     return {
         "message": "Telemetry stored successfully",
@@ -688,3 +744,23 @@ def delete_geofence(
     db.commit()
 
     return {"message": f"Geofence '{geofence.name}' deleted"}
+
+
+# --------------------------------------------------
+# WebSocket - Real-time telemetry stream
+# --------------------------------------------------
+
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time telemetry updates.
+    Clients connect here to receive live equipment position updates
+    without polling.
+    """
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive; we only send from broadcast
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)

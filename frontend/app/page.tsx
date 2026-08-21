@@ -31,7 +31,7 @@ function computeFleetSummary(
 }
 
 export default function DashboardPage() {
-  const { equipment, loading: eqLoading, error: eqError, refetch: eqRefetch } = useEquipment();
+  const { equipment, loading: eqLoading, error: eqError, refetch: eqRefetch, wsConnected } = useEquipment();
   const { devices, loading: devLoading, error: devError, refetch: devRefetch } = useDevices();
 
   const loading = eqLoading || devLoading;
@@ -60,9 +60,19 @@ export default function DashboardPage() {
       {/* Page Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Real-time fleet overview and equipment status
-        </p>
+        <div className="mt-1 flex items-center gap-3">
+          <p className="text-sm text-gray-500">
+            Real-time fleet overview and equipment status
+          </p>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+            wsConnected
+              ? "bg-green-50 text-green-700 border border-green-200"
+              : "bg-gray-50 text-gray-500 border border-gray-200"
+          }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${wsConnected ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
+            {wsConnected ? "Live" : "Polling"}
+          </span>
+        </div>
       </div>
 
       {/* KPI Cards */}

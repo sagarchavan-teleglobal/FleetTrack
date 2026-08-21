@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Activity, Filter } from "lucide-react";
+import { Activity, Filter, Download } from "lucide-react";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorState from "@/components/ui/ErrorState";
 import EmptyState from "@/components/ui/EmptyState";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { useEquipment } from "@/lib/hooks/useEquipment";
 import { useTelemetry } from "@/lib/hooks/useTelemetry";
+import { exportTelemetryCsv } from "@/lib/api";
 
 export default function TelemetryPage() {
   const { equipment, loading: eqLoading } = useEquipment(30000); // slower poll for this page
@@ -72,6 +73,16 @@ export default function TelemetryPage() {
         <span className="text-xs text-gray-500">
           Showing {filteredTelemetry.length} records (latest first)
         </span>
+
+        {(selectedEquipment || effectiveEquipment) && telemetry.length > 0 && (
+          <button
+            onClick={() => exportTelemetryCsv(selectedEquipment || effectiveEquipment || "")}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </button>
+        )}
       </div>
 
       {/* Content */}

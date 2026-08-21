@@ -1,16 +1,18 @@
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import Base, engine
-from app.db_models import DeviceDB, EquipmentDB, TelemetryDB
+from app.db_models import AlertDB, DeviceDB, EquipmentDB, GeofenceDB, TelemetryDB
 from app.dependencies import get_db
 from app.models import Equipment
 from app.schemas import Telemetry, EquipmentCreate, DeviceCreate
 from app.services.utilization import calculate_utilization
+from app.services.alerts import check_alerts
 
 
 app = FastAPI(
@@ -285,6 +287,20 @@ def receive_telemetry(
     db.add(telemetry_record)
 
     # ----------------------------------------------
+    # 6b. Check alert rules
+    # ----------------------------------------------
+
+    check_alerts(
+        db=db,
+        equipment_id=telemetry.equipment_id,
+        speed=telemetry.speed,
+        engine_on=telemetry.engine_on,
+        signal_strength=telemetry.signal_strength,
+        device=device,
+        status=status,
+    )
+
+    # ----------------------------------------------
     # 7. Commit transaction
     # ----------------------------------------------
 
@@ -465,3 +481,210 @@ def create_device(
     return device
 
 
+
+# --------------------------------------------------
+# Alerts
+# --------------------------------------------------
+
+@app.get("/alerts")
+def get_alerts(
+    limit: int = Query(default=50, le=200),
+    acknowledged: bool | None = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(AlertDB)
+
+    if acknowledged is not None:
+        query = query.filter(AlertDB.acknowledged == acknowledged)
+
+    alerts = (
+        query
+        .order_by(AlertDB.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return alerts
+
+
+@app.get("/alerts/count")
+def get_alert_count(
+    db: Session = Depends(get_db)
+):
+    unacknowledged = (
+        db.query(AlertDB)
+        .filter(AlertDB.acknowledged == False)
+        .count()
+    )
+
+    total = db.query(AlertDB).count()
+
+    return {
+        "total": total,
+        "unacknowledged": unacknowledged,
+    }
+
+
+@app.patch("/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(
+    alert_id: int,
+    db: Session = Depends(get_db)
+):
+    alert = (
+        db.query(AlertDB)
+        .filter(AlertDB.id == alert_id)
+        .first()
+    )
+
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Alert not found"
+        )
+
+    alert.acknowledged = True
+    db.commit()
+
+    return {"message": "Alert acknowledged"}
+
+
+@app.patch("/alerts/acknowledge-all")
+def acknowledge_all_alerts(
+    db: Session = Depends(get_db)
+):
+    db.query(AlertDB).filter(
+        AlertDB.acknowledged == False
+    ).update({"acknowledged": True})
+
+    db.commit()
+
+    return {"message": "All alerts acknowledged"}
+
+
+# --------------------------------------------------
+# Telemetry Export (CSV)
+# --------------------------------------------------
+
+@app.get("/equipment/{equipment_id}/telemetry/export")
+def export_telemetry_csv(
+    equipment_id: str,
+    db: Session = Depends(get_db)
+):
+    records = (
+        db.query(TelemetryDB)
+        .filter(TelemetryDB.equipment_id == equipment_id)
+        .order_by(TelemetryDB.timestamp.desc())
+        .limit(1000)
+        .all()
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail="No telemetry found"
+        )
+
+    import io
+    import csv
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Timestamp", "Equipment ID", "Device ID",
+        "Latitude", "Longitude", "Speed (km/h)",
+        "Engine On", "Status", "Signal Strength (%)"
+    ])
+
+    for r in records:
+        writer.writerow([
+            r.timestamp.isoformat(),
+            r.equipment_id,
+            r.device_id,
+            f"{r.latitude:.6f}",
+            f"{r.longitude:.6f}",
+            f"{r.speed:.2f}",
+            r.engine_on,
+            r.status,
+            r.signal_strength,
+        ])
+
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename={equipment_id}_telemetry.csv"
+        }
+    )
+
+
+# --------------------------------------------------
+# Geofences
+# --------------------------------------------------
+
+@app.get("/geofences")
+def get_geofences(
+    db: Session = Depends(get_db)
+):
+    geofences = db.query(GeofenceDB).all()
+    return geofences
+
+
+@app.post("/geofences")
+def create_geofence(
+    name: str,
+    polygon: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a geofence zone.
+    polygon should be a JSON string: [[lat,lng], [lat,lng], ...]
+    """
+    import json
+
+    # Validate polygon JSON
+    try:
+        coords = json.loads(polygon)
+        if not isinstance(coords, list) or len(coords) < 3:
+            raise ValueError("Need at least 3 points")
+    except (json.JSONDecodeError, ValueError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid polygon: {str(e)}"
+        )
+
+    geofence = GeofenceDB(
+        name=name,
+        polygon=polygon,
+        created_at=datetime.now()
+    )
+
+    db.add(geofence)
+    db.commit()
+    db.refresh(geofence)
+
+    return geofence
+
+
+@app.delete("/geofences/{geofence_id}")
+def delete_geofence(
+    geofence_id: int,
+    db: Session = Depends(get_db)
+):
+    geofence = (
+        db.query(GeofenceDB)
+        .filter(GeofenceDB.id == geofence_id)
+        .first()
+    )
+
+    if geofence is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Geofence not found"
+        )
+
+    db.delete(geofence)
+    db.commit()
+
+    return {"message": f"Geofence '{geofence.name}' deleted"}

@@ -9,7 +9,9 @@ import {
   Activity,
   BarChart3,
   Radio,
+  Bell,
 } from "lucide-react";
+import { useAlerts } from "@/lib/hooks/useAlerts";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -17,11 +19,13 @@ const navigation = [
   { name: "Live Tracking", href: "/tracking", icon: MapPin },
   { name: "Telemetry", href: "/telemetry", icon: Activity },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Alerts", href: "/alerts", icon: Bell },
   { name: "Devices", href: "/devices", icon: Radio },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { count } = useAlerts(10000);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 w-64 border-r border-gray-200 bg-white">
@@ -56,6 +60,11 @@ export default function Sidebar() {
                 }`}
               />
               {item.name}
+              {item.name === "Alerts" && count.unacknowledged > 0 && (
+                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-medium text-white">
+                  {count.unacknowledged > 99 ? "99+" : count.unacknowledged}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -66,7 +75,7 @@ export default function Sidebar() {
         <div className="text-xs text-gray-500">
           Equipment Tracking POC
           <br />
-          <span className="text-gray-400">v0.1.0</span>
+          <span className="text-gray-400">v0.2.0</span>
         </div>
       </div>
     </aside>

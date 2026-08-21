@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { Equipment, Device } from "@/lib/types";
+import type { Geofence } from "@/lib/hooks/useGeofences";
 
 const FleetMap = dynamic(() => import("./FleetMap"), {
   ssr: false,
@@ -18,6 +19,8 @@ const FleetMap = dynamic(() => import("./FleetMap"), {
 interface DynamicFleetMapProps {
   equipment: Equipment[];
   devices: Device[];
+  geofences?: Geofence[];
+  onDeleteGeofence?: (id: number) => void;
   height?: string;
   className?: string;
 }

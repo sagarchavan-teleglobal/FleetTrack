@@ -131,3 +131,69 @@ class DeviceDB(Base):
         Integer,
         default=0
     )
+
+
+class AlertDB(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    equipment_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False
+    )
+
+    alert_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False
+    )
+
+    severity: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False
+    )
+
+    message: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False
+    )
+
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False
+    )
+
+    acknowledged: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False
+    )
+
+
+class GeofenceDB(Base):
+    __tablename__ = "geofences"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+
+    # Store polygon as JSON string: [[lat,lng], [lat,lng], ...]
+    polygon: Mapped[str] = mapped_column(
+        String(5000),
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False
+    )

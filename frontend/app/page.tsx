@@ -59,15 +59,15 @@ export default function DashboardPage() {
     <div>
       {/* Page Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
+        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">Dashboard</h1>
         <div className="mt-1 flex items-center gap-3">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             Real-time fleet overview and equipment status
           </p>
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
             wsConnected
-              ? "bg-green-50 text-green-700 border border-green-200"
-              : "bg-gray-50 text-gray-500 border border-gray-200"
+              ? "bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800"
+              : "bg-gray-50 text-gray-500 border border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600"
           }`}>
             <span className={`h-1.5 w-1.5 rounded-full ${wsConnected ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
             {wsConnected ? "Live" : "Polling"}
@@ -120,15 +120,15 @@ export default function DashboardPage() {
 
       {/* Live Map */}
       <div className="mt-8">
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-medium text-gray-900">Live Map</h2>
-              <p className="text-sm text-gray-500">
+              <h2 className="text-lg font-medium text-gray-900 dark:text-white">Live Map</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
                 Real-time equipment locations • Auto-refreshes every 5 seconds
               </p>
             </div>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
+            <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
               <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
               Live
             </div>

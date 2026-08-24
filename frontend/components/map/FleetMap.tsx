@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 import EquipmentMarker from "./EquipmentMarker";
 import GeofenceLayer from "./GeofenceLayer";
@@ -15,6 +15,7 @@ interface FleetMapProps {
   onDeleteGeofence?: (id: number) => void;
   height?: string;
   className?: string;
+  children?: ReactNode;
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY || "";
@@ -26,6 +27,7 @@ export default function FleetMap({
   onDeleteGeofence,
   height = "400px",
   className = "",
+  children,
 }: FleetMapProps) {
   // Build device lookup
   const deviceMap = useMemo(
@@ -55,7 +57,7 @@ export default function FleetMap({
     : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
   return (
-    <div className={`rounded-lg overflow-hidden border border-gray-200 ${className}`} style={{ height }}>
+    <div className={`rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 ${className}`} style={{ height }}>
       <MapContainer
         center={center}
         zoom={15}
@@ -69,6 +71,7 @@ export default function FleetMap({
           zoomOffset={-1}
         />
         <GeofenceLayer geofences={geofences} onDelete={onDeleteGeofence} />
+        {children}
         {equipment.map((eq) => (
           <EquipmentMarker
             key={eq.id}

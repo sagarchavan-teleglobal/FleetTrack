@@ -12,6 +12,9 @@ import {
   Bell,
   Moon,
   Sun,
+  CalendarCheck,
+  FileBarChart,
+  MessageCircle,
 } from "lucide-react";
 import { useAlerts } from "@/lib/hooks/useAlerts";
 import { useTheme } from "@/components/layout/ThemeProvider";
@@ -19,6 +22,9 @@ import { useTheme } from "@/components/layout/ThemeProvider";
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Equipment", href: "/equipment", icon: Truck },
+  { name: "Bookings", href: "/bookings", icon: CalendarCheck },
+  { name: "Reports", href: "/reports", icon: FileBarChart },
+  { name: "Chat / Voice", href: "/chat", icon: MessageCircle },
   { name: "Live Tracking", href: "/tracking", icon: MapPin },
   { name: "Telemetry", href: "/telemetry", icon: Activity },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },

@@ -7,6 +7,11 @@ import {
   StopCircle,
   Wifi,
   WifiOff,
+  Construction,
+  CalendarCheck,
+  IndianRupee,
+  Users,
+  Wrench,
 } from "lucide-react";
 import KpiCard from "@/components/dashboard/KpiCard";
 import DynamicFleetMap from "@/components/map/DynamicFleetMap";
@@ -14,7 +19,10 @@ import LoadingState from "@/components/ui/LoadingState";
 import ErrorState from "@/components/ui/ErrorState";
 import { useEquipment } from "@/lib/hooks/useEquipment";
 import { useDevices } from "@/lib/hooks/useDevices";
+import { useDashboard } from "@/lib/hooks/useDashboard";
 import type { FleetSummary } from "@/lib/types";
+import CraneStatusChart from "@/components/dashboard/CraneStatusChart";
+import VendorCards from "@/components/dashboard/VendorCards";
 
 function computeFleetSummary(
   equipment: { status: string }[],
@@ -33,9 +41,10 @@ function computeFleetSummary(
 export default function DashboardPage() {
   const { equipment, loading: eqLoading, error: eqError, refetch: eqRefetch, wsConnected } = useEquipment();
   const { devices, loading: devLoading, error: devError, refetch: devRefetch } = useDevices();
+  const { summary, loading: dashLoading, error: dashError, refetch: dashRefetch } = useDashboard();
 
-  const loading = eqLoading || devLoading;
-  const error = eqError || devError;
+  const loading = eqLoading || devLoading || dashLoading;
+  const error = eqError || devError || dashError;
 
   if (loading) {
     return <LoadingState message="Loading fleet data..." />;
@@ -48,12 +57,13 @@ export default function DashboardPage() {
         onRetry={() => {
           eqRefetch();
           devRefetch();
+          dashRefetch();
         }}
       />
     );
   }
 
-  const summary = computeFleetSummary(equipment, devices);
+  const fleetSummary = computeFleetSummary(equipment, devices);
 
   return (
     <div>
@@ -62,7 +72,7 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">Dashboard</h1>
         <div className="mt-1 flex items-center gap-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Real-time fleet overview and equipment status
+            Real-time fleet overview, crane booking status, and vendor management
           </p>
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
             wsConnected
@@ -75,47 +85,101 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
+      {/* Fleet KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <KpiCard
           title="Total Equipment"
-          value={summary.total}
+          value={fleetSummary.total}
           icon={Truck}
           color="blue"
         />
         <KpiCard
           title="Working"
-          value={summary.working}
+          value={fleetSummary.working}
           icon={Cog}
           color="green"
           subtitle="Engine on, moving"
         />
         <KpiCard
           title="Idle"
-          value={summary.idle}
+          value={fleetSummary.idle}
           icon={PauseCircle}
           color="amber"
           subtitle="Engine on, stationary"
         />
         <KpiCard
           title="Stopped"
-          value={summary.stopped}
+          value={fleetSummary.stopped}
           icon={StopCircle}
           color="red"
           subtitle="Engine off"
         />
         <KpiCard
           title="GPS Connected"
-          value={summary.connectedDevices}
+          value={fleetSummary.connectedDevices}
           icon={Wifi}
           color="green"
         />
         <KpiCard
           title="GPS Disconnected"
-          value={summary.disconnectedDevices}
+          value={fleetSummary.disconnectedDevices}
           icon={WifiOff}
           color="gray"
         />
+      </div>
+
+      {/* Crane Booking KPIs */}
+      {summary && (
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <KpiCard
+            title="Total Cranes"
+            value={summary.total_cranes}
+            icon={Construction}
+            color="blue"
+          />
+          <KpiCard
+            title="Available Cranes"
+            value={summary.available_cranes}
+            icon={Construction}
+            color="green"
+            subtitle="Ready for booking"
+          />
+          <KpiCard
+            title="Active Bookings"
+            value={summary.active_bookings}
+            icon={CalendarCheck}
+            color="purple"
+          />
+          <KpiCard
+            title="Revenue Collected"
+            value={`₹${summary.revenue_collected.toLocaleString("en-IN")}`}
+            icon={IndianRupee}
+            color="green"
+          />
+          <KpiCard
+            title="In Repair"
+            value={summary.repair_cranes}
+            icon={Wrench}
+            color="amber"
+          />
+        </div>
+      )}
+
+      {/* Crane Status Chart + Vendor Cards */}
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Pie Chart */}
+        {summary && (
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
+            <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Crane Lifecycle Status</h2>
+            <CraneStatusChart breakdown={summary.crane_status_breakdown} />
+          </div>
+        )}
+
+        {/* Vendors */}
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
+          <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Vendors</h2>
+          <VendorCards />
+        </div>
       </div>
 
       {/* Live Map */}
@@ -125,7 +189,7 @@ export default function DashboardPage() {
             <div>
               <h2 className="text-lg font-medium text-gray-900 dark:text-white">Live Map</h2>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Real-time equipment locations • Auto-refreshes every 5 seconds
+                Real-time equipment locations
               </p>
             </div>
             <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">

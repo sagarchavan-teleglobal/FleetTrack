@@ -9,12 +9,34 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import Base, engine
-from app.db_models import AlertDB, DeviceDB, EquipmentDB, GeofenceDB, TelemetryDB
+from app.db_models import AlertDB, BookingDB, ChatMessageDB, DeviceDB, EquipmentDB, GeofenceDB, TelemetryDB, VendorDB, VoiceCallDB
 from app.dependencies import get_db
 from app.models import Equipment
-from app.schemas import Telemetry, EquipmentCreate, DeviceCreate
+from app.schemas import (
+    Telemetry, EquipmentCreate, DeviceCreate,
+    VendorCreate, VendorUpdate, Vendor, VendorWithCranes,
+    BookingCreate, Booking, BookingWithCrane,
+    PaymentRequest, PaymentResult,
+    BookingStatusUpdate,
+    CraneSummary, LifecycleUpdate,
+    DashboardSummary, FleetStatusCount,
+)
 from app.services.utilization import calculate_utilization
 from app.services.alerts import check_alerts
+from app.services.bookings import (
+    get_available_cranes,
+    create_booking,
+    process_payment,
+    update_booking_status,
+    update_crane_lifecycle,
+)
+from app.services.communication import (
+    send_message,
+    get_chat_history,
+    initiate_voice_call,
+    get_call_history,
+)
+from app.migrations import ensure_schema
 
 
 # ─────────────────────────────────────────────
@@ -66,6 +88,9 @@ app.add_middleware(
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Apply idempotent schema patches for new columns on existing tables
+ensure_schema(engine)
 
 
 # --------------------------------------------------
@@ -744,6 +769,608 @@ def delete_geofence(
     db.commit()
 
     return {"message": f"Geofence '{geofence.name}' deleted"}
+
+
+# --------------------------------------------------
+# Utilization Report (date-range, per-crane daily)
+# --------------------------------------------------
+
+@app.get("/reports/utilization/{equipment_id}")
+def get_utilization_report(
+    equipment_id: str,
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Per-crane utilization report with date range filter.
+    Returns overall stats + daily breakdown for charting.
+    """
+    from datetime import datetime as dt, timedelta
+
+    try:
+        start = dt.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        end = dt.fromisoformat(end_date.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601.")
+
+    # Fetch telemetry in range
+    records = (
+        db.query(TelemetryDB)
+        .filter(
+            TelemetryDB.equipment_id == equipment_id,
+            TelemetryDB.timestamp >= start,
+            TelemetryDB.timestamp <= end,
+        )
+        .order_by(TelemetryDB.timestamp.asc())
+        .all()
+    )
+
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail="No telemetry found for equipment in this date range"
+        )
+
+    # Overall utilization
+    overall = calculate_utilization(records)
+
+    # Daily breakdown
+    daily = []
+    current_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    while current_day < end_day:
+        next_day = current_day + timedelta(days=1)
+        day_records = [
+            r for r in records
+            if current_day <= r.timestamp < next_day
+        ]
+
+        if len(day_records) >= 2:
+            day_util = calculate_utilization(day_records)
+        else:
+            day_util = {
+                "working_seconds": 0,
+                "idle_seconds": 0,
+                "offline_seconds": 0,
+                "total_seconds": 0,
+                "uptime_percentage": 0,
+                "utilization_percentage": 0,
+            }
+
+        daily.append({
+            "date": current_day.strftime("%Y-%m-%d"),
+            **day_util,
+        })
+
+        current_day = next_day
+
+    # Equipment info
+    equipment = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.id == equipment_id)
+        .first()
+    )
+
+    return {
+        "equipment_id": equipment_id,
+        "equipment_name": equipment.name if equipment else equipment_id,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total_records": len(records),
+        "overall": overall,
+        "daily": daily,
+    }
+
+
+@app.get("/reports/fleet-utilization")
+def get_fleet_utilization_report(
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Fleet-wide utilization for all cranes in date range."""
+    from datetime import datetime as dt
+
+    try:
+        start = dt.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        end = dt.fromisoformat(end_date.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601.")
+
+    cranes = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.equipment_type == "crane")
+        .all()
+    )
+
+    results = []
+    for crane in cranes:
+        records = (
+            db.query(TelemetryDB)
+            .filter(
+                TelemetryDB.equipment_id == crane.id,
+                TelemetryDB.timestamp >= start,
+                TelemetryDB.timestamp <= end,
+            )
+            .order_by(TelemetryDB.timestamp.asc())
+            .all()
+        )
+
+        if len(records) >= 2:
+            util = calculate_utilization(records)
+        else:
+            util = {
+                "working_seconds": 0,
+                "idle_seconds": 0,
+                "offline_seconds": 0,
+                "total_seconds": 0,
+                "uptime_percentage": 0,
+                "utilization_percentage": 0,
+            }
+
+        results.append({
+            "equipment_id": crane.id,
+            "equipment_name": crane.name,
+            "lifecycle_status": crane.lifecycle_status,
+            "total_records": len(records),
+            **util,
+        })
+
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "cranes": results,
+    }
+
+
+# --------------------------------------------------
+# Vendors
+# --------------------------------------------------
+
+@app.get("/vendors", response_model=list[Vendor])
+def get_vendors(db: Session = Depends(get_db)):
+    vendors = db.query(VendorDB).order_by(VendorDB.name).all()
+    return vendors
+
+
+@app.get("/vendors/{vendor_id}", response_model=VendorWithCranes)
+def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
+    vendor = db.query(VendorDB).filter(VendorDB.id == vendor_id).first()
+
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    cranes = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.vendor_id == vendor_id)
+        .all()
+    )
+
+    return VendorWithCranes(
+        id=vendor.id,
+        name=vendor.name,
+        phone=vendor.phone,
+        email=vendor.email,
+        company=vendor.company,
+        created_at=vendor.created_at,
+        crane_count=len(cranes),
+        cranes=cranes,
+    )
+
+
+@app.post("/vendors", response_model=Vendor)
+def create_vendor(payload: VendorCreate, db: Session = Depends(get_db)):
+    vendor = VendorDB(
+        name=payload.name,
+        phone=payload.phone,
+        email=payload.email,
+        company=payload.company,
+        created_at=datetime.now(),
+    )
+    db.add(vendor)
+    db.commit()
+    db.refresh(vendor)
+    return vendor
+
+
+@app.patch("/vendors/{vendor_id}", response_model=Vendor)
+def update_vendor(
+    vendor_id: int,
+    payload: VendorUpdate,
+    db: Session = Depends(get_db),
+):
+    vendor = db.query(VendorDB).filter(VendorDB.id == vendor_id).first()
+
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(vendor, field, value)
+
+    db.commit()
+    db.refresh(vendor)
+    return vendor
+
+
+@app.delete("/vendors/{vendor_id}")
+def delete_vendor(vendor_id: int, db: Session = Depends(get_db)):
+    vendor = db.query(VendorDB).filter(VendorDB.id == vendor_id).first()
+
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    # Unlink cranes
+    db.query(EquipmentDB).filter(
+        EquipmentDB.vendor_id == vendor_id
+    ).update({"vendor_id": None})
+
+    db.delete(vendor)
+    db.commit()
+    return {"message": f"Vendor '{vendor.name}' deleted"}
+
+
+# --------------------------------------------------
+# Cranes & Lifecycle
+# --------------------------------------------------
+
+@app.get("/cranes", response_model=list[CraneSummary])
+def get_cranes(db: Session = Depends(get_db)):
+    """All cranes with vendor + active booking info."""
+
+    cranes = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.equipment_type == "crane")
+        .all()
+    )
+
+    results = []
+    for crane in cranes:
+        vendor = None
+        if crane.vendor_id:
+            vendor = db.query(VendorDB).filter(VendorDB.id == crane.vendor_id).first()
+
+        active_booking = (
+            db.query(BookingDB)
+            .filter(
+                BookingDB.crane_id == crane.id,
+                BookingDB.booking_status.in_(["confirmed", "active"]),
+            )
+            .first()
+        )
+
+        results.append(
+            CraneSummary(
+                id=crane.id,
+                name=crane.name,
+                equipment_type=crane.equipment_type,
+                latitude=crane.latitude,
+                longitude=crane.longitude,
+                speed=crane.speed,
+                engine_on=crane.engine_on,
+                status=crane.status,
+                lifecycle_status=crane.lifecycle_status,
+                hourly_rate=crane.hourly_rate,
+                vendor=vendor,
+                active_booking_id=active_booking.id if active_booking else None,
+                active_booking_customer=active_booking.customer_name if active_booking else None,
+            )
+        )
+
+    return results
+
+
+@app.get("/cranes/available")
+def get_available_cranes_endpoint(
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Return cranes available for a given date range."""
+    from datetime import datetime as dt
+
+    try:
+        start = dt.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        end = dt.fromisoformat(end_date.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601.")
+
+    cranes = get_available_cranes(db, start, end)
+    return cranes
+
+
+@app.patch("/cranes/{crane_id}/lifecycle")
+def patch_crane_lifecycle(
+    crane_id: str,
+    payload: LifecycleUpdate,
+    db: Session = Depends(get_db),
+):
+    """Manually override crane lifecycle (repair, deceased, available)."""
+    crane = update_crane_lifecycle(db, crane_id, payload.lifecycle_status)
+    return crane
+
+
+# --------------------------------------------------
+# Bookings
+# --------------------------------------------------
+
+@app.get("/bookings", response_model=list[BookingWithCrane])
+def get_bookings(
+    status: str | None = Query(default=None),
+    crane_id: str | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    db: Session = Depends(get_db),
+):
+    """List bookings with optional status/crane filter."""
+
+    query = db.query(BookingDB)
+
+    if status:
+        query = query.filter(BookingDB.booking_status == status)
+
+    if crane_id:
+        query = query.filter(BookingDB.crane_id == crane_id)
+
+    bookings = (
+        query.order_by(BookingDB.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    results = []
+    for b in bookings:
+        crane = db.query(EquipmentDB).filter(EquipmentDB.id == b.crane_id).first()
+        vendor = None
+        if crane and crane.vendor_id:
+            v = db.query(VendorDB).filter(VendorDB.id == crane.vendor_id).first()
+            vendor = v.name if v else None
+
+        results.append(
+            BookingWithCrane(
+                id=b.id,
+                crane_id=b.crane_id,
+                customer_name=b.customer_name,
+                customer_phone=b.customer_phone,
+                site_address=b.site_address,
+                start_date=b.start_date,
+                end_date=b.end_date,
+                payment_status=b.payment_status,
+                booking_status=b.booking_status,
+                amount=b.amount,
+                payment_reference=b.payment_reference,
+                created_at=b.created_at,
+                crane_name=crane.name if crane else None,
+                vendor_name=vendor,
+            )
+        )
+
+    return results
+
+
+@app.get("/bookings/{booking_id}", response_model=BookingWithCrane)
+def get_booking(booking_id: int, db: Session = Depends(get_db)):
+    b = db.query(BookingDB).filter(BookingDB.id == booking_id).first()
+
+    if b is None:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    crane = db.query(EquipmentDB).filter(EquipmentDB.id == b.crane_id).first()
+    vendor = None
+    if crane and crane.vendor_id:
+        v = db.query(VendorDB).filter(VendorDB.id == crane.vendor_id).first()
+        vendor = v.name if v else None
+
+    return BookingWithCrane(
+        id=b.id,
+        crane_id=b.crane_id,
+        customer_name=b.customer_name,
+        customer_phone=b.customer_phone,
+        site_address=b.site_address,
+        start_date=b.start_date,
+        end_date=b.end_date,
+        payment_status=b.payment_status,
+        booking_status=b.booking_status,
+        amount=b.amount,
+        payment_reference=b.payment_reference,
+        created_at=b.created_at,
+        crane_name=crane.name if crane else None,
+        vendor_name=vendor,
+    )
+
+
+@app.post("/bookings", response_model=Booking)
+def create_booking_endpoint(
+    payload: BookingCreate,
+    db: Session = Depends(get_db),
+):
+    """Create a new booking for a crane (payment still pending)."""
+    booking = create_booking(
+        db=db,
+        crane_id=payload.crane_id,
+        customer_name=payload.customer_name,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        customer_phone=payload.customer_phone,
+        site_address=payload.site_address,
+    )
+    return booking
+
+
+@app.post("/bookings/{booking_id}/pay", response_model=PaymentResult)
+def pay_booking(
+    booking_id: int,
+    payload: PaymentRequest,
+    db: Session = Depends(get_db),
+):
+    """Process mock payment for a booking."""
+    result = process_payment(
+        db=db,
+        booking_id=booking_id,
+        simulate_failure=payload.simulate_failure,
+    )
+    return result
+
+
+@app.patch("/bookings/{booking_id}/status", response_model=Booking)
+def patch_booking_status(
+    booking_id: int,
+    payload: BookingStatusUpdate,
+    db: Session = Depends(get_db),
+):
+    """Transition booking status (with lifecycle side-effects)."""
+    booking = update_booking_status(db, booking_id, payload.booking_status)
+    return booking
+
+
+# --------------------------------------------------
+# Dashboard Summary (enhanced)
+# --------------------------------------------------
+
+@app.get("/dashboard/summary", response_model=DashboardSummary)
+def get_dashboard_summary(db: Session = Depends(get_db)):
+    """Aggregated KPIs for the enhanced dashboard."""
+
+    all_equipment = db.query(EquipmentDB).all()
+    cranes = [e for e in all_equipment if e.equipment_type == "crane"]
+
+    # Status breakdown
+    breakdown: dict[str, int] = {}
+    for c in cranes:
+        ls = c.lifecycle_status or "available"
+        breakdown[ls] = breakdown.get(ls, 0) + 1
+
+    status_list = [
+        FleetStatusCount(lifecycle_status=k, count=v)
+        for k, v in breakdown.items()
+    ]
+
+    # Bookings
+    active_bookings = (
+        db.query(BookingDB)
+        .filter(BookingDB.booking_status.in_(["confirmed", "active"]))
+        .count()
+    )
+
+    pending_payments = (
+        db.query(BookingDB)
+        .filter(BookingDB.payment_status == "pending")
+        .count()
+    )
+
+    from sqlalchemy import func
+
+    revenue = (
+        db.query(func.coalesce(func.sum(BookingDB.amount), 0.0))
+        .filter(BookingDB.payment_status == "paid")
+        .scalar()
+    )
+
+    total_vendors = db.query(VendorDB).count()
+
+    return DashboardSummary(
+        total_equipment=len(all_equipment),
+        total_cranes=len(cranes),
+        crane_status_breakdown=status_list,
+        available_cranes=breakdown.get("available", 0),
+        booked_cranes=breakdown.get("booked", 0),
+        working_cranes=breakdown.get("working", 0),
+        repair_cranes=breakdown.get("repair", 0),
+        deceased_cranes=breakdown.get("deceased", 0),
+        total_vendors=total_vendors,
+        active_bookings=active_bookings,
+        pending_payments=pending_payments,
+        revenue_collected=float(revenue),
+    )
+
+
+# --------------------------------------------------
+# Chat / Messaging
+# --------------------------------------------------
+
+@app.get("/chat/{vendor_id}")
+def get_vendor_chat(
+    vendor_id: int,
+    limit: int = Query(default=50, le=200),
+    db: Session = Depends(get_db),
+):
+    """Get conversation thread with a vendor."""
+    return get_chat_history(db, vendor_id, limit)
+
+
+@app.post("/chat/{vendor_id}")
+def send_chat_message(
+    vendor_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    Send a message to a vendor.
+    Body: { "message": "...", "channel": "whatsapp" | "sms" | "in_app" }
+    Returns both the user message and simulated vendor reply.
+    """
+    message = body.get("message", "").strip()
+    channel = body.get("channel", "in_app")
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    return send_message(db, vendor_id, message, channel)
+
+
+@app.post("/chat/{vendor_id}/quick-action")
+def chat_quick_action(
+    vendor_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    Pre-built quick actions. Body: { "action": "status_update" | "eta" | "maintenance" }
+    """
+    action = body.get("action", "status_update")
+
+    templates = {
+        "status_update": "Hi, can you please provide a status update on the crane currently deployed at your site?",
+        "eta": "When will the crane arrive at the site? Please share the ETA.",
+        "maintenance": "We need to schedule maintenance for the crane. When is a good time?",
+        "payment_reminder": "This is a reminder regarding the pending payment for the latest booking. Please update.",
+    }
+
+    message = templates.get(action, templates["status_update"])
+    return send_message(db, vendor_id, message, "whatsapp")
+
+
+# --------------------------------------------------
+# Voice Calls (AI Voicebot)
+# --------------------------------------------------
+
+@app.post("/voice/call/{vendor_id}")
+def call_vendor(
+    vendor_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Initiate an AI voice call to a vendor.
+
+    Architecture is ready for Twilio/Bland.ai integration:
+    - Replace mock in services/communication.py with real API call
+    - Add webhook endpoint for call completion + transcript
+    - Store external_call_id for tracking
+
+    Currently returns a simulated completed call with transcript.
+    """
+    return initiate_voice_call(db, vendor_id)
+
+
+@app.get("/voice/calls")
+def get_voice_calls(
+    vendor_id: int | None = Query(default=None),
+    limit: int = Query(default=20, le=100),
+    db: Session = Depends(get_db),
+):
+    """Get voice call history, optionally filtered by vendor."""
+    return get_call_history(db, vendor_id, limit)
 
 
 # --------------------------------------------------

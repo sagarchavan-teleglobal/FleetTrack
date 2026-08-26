@@ -975,7 +975,7 @@ def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
         company=vendor.company,
         created_at=vendor.created_at,
         crane_count=len(cranes),
-        cranes=cranes,
+        cranes=[Equipment.model_validate(c, from_attributes=True) for c in cranes],
     )
 
 

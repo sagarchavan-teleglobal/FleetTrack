@@ -11,17 +11,19 @@ import {
   PhoneCall,
   Clock,
   FileText,
+  Sparkles,
 } from "lucide-react";
 import {
   getVendors,
   getChatHistory,
-  sendChatMessage,
+  streamChatMessage,
   sendQuickAction,
   callVendor,
   getVoiceCalls,
+  getAiStatus,
 } from "@/lib/api";
 import type { Vendor } from "@/lib/types";
-import type { ChatMessage, VoiceCall } from "@/lib/api";
+import type { ChatMessage, VoiceCall, AiStatus } from "@/lib/api";
 import LoadingState from "@/components/ui/LoadingState";
 
 const QUICK_ACTIONS = [
@@ -42,8 +44,15 @@ export default function ChatPage() {
   const [callHistory, setCallHistory] = useState<VoiceCall[]>([]);
   const [showCallPanel, setShowCallPanel] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+
+  // Vendor reply currently being streamed in, token by token. Rendered as
+  // its own bubble below `messages` until the "done" event arrives, at
+  // which point it is replaced by the persisted message from the server.
+  const [streamingText, setStreamingText] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   // Load vendors
   useEffect(() => {
@@ -51,6 +60,13 @@ export default function ChatPage() {
       .then(setVendors)
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, []);
+
+  // Check which engine is driving replies
+  useEffect(() => {
+    getAiStatus()
+      .then(setAiStatus)
+      .catch(() => setAiStatus(null));
   }, []);
 
   // Load chat when vendor changes
@@ -66,20 +82,75 @@ export default function ChatPage() {
     setShowCallPanel(false);
   }, [selectedVendor]);
 
-  // Auto-scroll chat
+  // Auto-scroll chat. `sending`/`streamingText` are dependencies so the
+  // typing indicator and each incoming token keep the view pinned to the
+  // bottom as they arrive.
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, sending, streamingText]);
+
+  // Cancel any in-flight stream if the user switches vendors or leaves the
+  // page, so a late-arriving token from a previous conversation can never
+  // land in the wrong thread.
+  useEffect(() => {
+    return () => streamAbortRef.current?.abort();
+  }, [selectedVendor]);
 
   const handleSend = async () => {
     if (!inputMessage.trim() || !selectedVendor) return;
 
+    const text = inputMessage;
+    const vendorId = selectedVendor.id;
+
+    // Show the outgoing message immediately; generation can take several
+    // seconds on a local model and the thread should not appear frozen.
+    const pending: ChatMessage = {
+      id: -Date.now(),
+      sender: "user",
+      message: text,
+      channel: "in_app",
+      status: "sending",
+      timestamp: new Date().toISOString(),
+    };
+
+    setInputMessage("");
+    setMessages((prev) => [...prev, pending]);
     setSending(true);
+    setStreamingText("");
+
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+
     try {
-      const result = await sendChatMessage(selectedVendor.id, inputMessage);
-      setMessages((prev) => [...prev, result.user_message, result.vendor_reply]);
-      setInputMessage("");
-    } catch {}
+      await streamChatMessage(
+        vendorId,
+        text,
+        "in_app",
+        (event) => {
+          if (event.type === "user_message") {
+            // Swap the optimistic bubble for the persisted one so its id
+            // and timestamp match the server's record.
+            setMessages((prev) => [
+              ...prev.filter((m) => m.id !== pending.id),
+              event.message,
+            ]);
+          } else if (event.type === "token") {
+            setStreamingText((prev) => (prev ?? "") + event.content);
+          } else if (event.type === "done") {
+            setMessages((prev) => [...prev, event.vendor_reply]);
+            setStreamingText(null);
+          } else if (event.type === "error") {
+            setStreamingText(null);
+          }
+        },
+        controller.signal
+      );
+    } catch {
+      setMessages((prev) => prev.filter((m) => m.id !== pending.id));
+      setInputMessage(text);
+      setStreamingText(null);
+    }
+
     setSending(false);
   };
 
@@ -164,7 +235,26 @@ export default function ChatPage() {
             {/* Chat Header */}
             <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
               <div>
-                <h3 className="font-medium text-gray-900 dark:text-white">{selectedVendor.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-gray-900 dark:text-white">{selectedVendor.name}</h3>
+                  {aiStatus && (
+                    <span
+                      title={
+                        aiStatus.available
+                          ? `Replies generated by ${aiStatus.model} running locally`
+                          : "Model offline — using scripted replies"
+                      }
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        aiStatus.available
+                          ? "bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/20 dark:text-violet-300 dark:border-violet-800"
+                          : "bg-gray-50 text-gray-500 border border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600"
+                      }`}
+                    >
+                      <Sparkles className="h-2.5 w-2.5" />
+                      {aiStatus.available ? aiStatus.model : "scripted"}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   {selectedVendor.phone} • {selectedVendor.company}
                 </p>
@@ -211,7 +301,7 @@ export default function ChatPage() {
                       msg.sender === "user"
                         ? "bg-blue-600 text-white"
                         : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
-                    }`}
+                    } ${msg.status === "sending" ? "opacity-60" : ""}`}
                   >
                     <p className="text-sm">{msg.message}</p>
                     <div className={`mt-1 flex items-center gap-2 text-xs ${
@@ -225,6 +315,28 @@ export default function ChatPage() {
                   </div>
                 </div>
               ))}
+
+              {/* Streaming vendor reply: bouncing dots before the first
+                  token, then the tokens themselves with a blinking cursor. */}
+              {sending && (
+                <div className="flex justify-start">
+                  <div className="max-w-[75%] rounded-lg bg-gray-100 dark:bg-gray-700 px-3 py-2">
+                    {streamingText ? (
+                      <p className="text-sm text-gray-900 dark:text-white">
+                        {streamingText}
+                        <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-gray-400 dark:bg-gray-500 align-middle" />
+                      </p>
+                    ) : (
+                      <div className="flex items-center gap-1 py-1">
+                        <span className="h-2 w-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:0ms]" />
+                        <span className="h-2 w-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:150ms]" />
+                        <span className="h-2 w-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:300ms]" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div ref={chatEndRef} />
             </div>
 
@@ -276,6 +388,9 @@ export default function ChatPage() {
                 </p>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                   {selectedVendor?.phone}
+                </p>
+                <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+                  AI agent is speaking with the vendor and transcribing
                 </p>
               </div>
             )}

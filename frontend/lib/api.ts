@@ -361,6 +361,79 @@ export async function sendChatMessage(
   });
 }
 
+// Discriminated union matching the SSE event payloads emitted by
+// POST /chat/{vendorId}/stream. See services/communication.py::stream_message.
+export type ChatStreamEvent =
+  | { type: "user_message"; message: ChatMessage }
+  | { type: "token"; content: string }
+  | { type: "done"; vendor_reply: ChatMessage; generated_by: "llm" | "fallback" }
+  | { type: "error"; detail: string };
+
+/**
+ * Stream a vendor reply token-by-token.
+ *
+ * `EventSource` only supports GET, so this parses the SSE wire format
+ * ("data: {...}\n\n" frames) directly off a POST fetch's ReadableStream.
+ *
+ * Calls `onEvent` for every parsed event in arrival order. Throws if the
+ * network request itself fails (non-2xx or fetch error); mid-stream issues
+ * are instead delivered as a `{type: "error"}` event so the caller can
+ * decide whether to keep any tokens already rendered.
+ */
+export async function streamChatMessage(
+  vendorId: number,
+  message: string,
+  channel: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(`${BASE_URL}/chat/${vendorId}/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, channel }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new ApiError(
+      response.status,
+      errorBody.detail || `Stream request failed with status ${response.status}`
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by a blank line; a frame may itself be
+    // split across chunk boundaries, so only consume complete frames and
+    // keep any trailing partial frame in the buffer for the next read.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+
+      const jsonText = line.slice(5).trim();
+      if (!jsonText) continue;
+
+      try {
+        onEvent(JSON.parse(jsonText) as ChatStreamEvent);
+      } catch {
+        // Malformed frame — skip rather than aborting the whole stream.
+      }
+    }
+  }
+}
+
 export async function sendQuickAction(
   vendorId: number,
   action: string
@@ -380,4 +453,20 @@ export async function callVendor(vendorId: number): Promise<VoiceCall> {
 export async function getVoiceCalls(vendorId?: number): Promise<VoiceCall[]> {
   const qs = vendorId ? `?vendor_id=${vendorId}` : "";
   return fetchApi<VoiceCall[]>(`/voice/calls${qs}`);
+}
+
+// ─────────────────────────────────────────────
+// AI / LLM status
+// ─────────────────────────────────────────────
+
+export interface AiStatus {
+  provider: string;
+  host: string;
+  model: string;
+  keep_alive: string;
+  available: boolean;
+}
+
+export async function getAiStatus(): Promise<AiStatus> {
+  return fetchApi<AiStatus>("/ai/status");
 }

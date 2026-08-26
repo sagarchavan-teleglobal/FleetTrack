@@ -7,11 +7,7 @@ import {
   StopCircle,
   Wifi,
   WifiOff,
-  Construction,
-  CalendarCheck,
   IndianRupee,
-  Users,
-  Wrench,
 } from "lucide-react";
 import KpiCard from "@/components/dashboard/KpiCard";
 import DynamicFleetMap from "@/components/map/DynamicFleetMap";
@@ -128,39 +124,14 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Crane Booking KPIs */}
+      {/* Revenue KPI */}
       {summary && (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          <KpiCard
-            title="Total Cranes"
-            value={summary.total_cranes}
-            icon={Construction}
-            color="blue"
-          />
-          <KpiCard
-            title="Available Cranes"
-            value={summary.available_cranes}
-            icon={Construction}
-            color="green"
-            subtitle="Ready for booking"
-          />
-          <KpiCard
-            title="Active Bookings"
-            value={summary.active_bookings}
-            icon={CalendarCheck}
-            color="purple"
-          />
           <KpiCard
             title="Revenue Collected"
             value={`₹${summary.revenue_collected.toLocaleString("en-IN")}`}
             icon={IndianRupee}
             color="green"
-          />
-          <KpiCard
-            title="In Repair"
-            value={summary.repair_cranes}
-            icon={Wrench}
-            color="amber"
           />
         </div>
       )}

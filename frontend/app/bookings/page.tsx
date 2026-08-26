@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Plus, Calendar, Filter } from "lucide-react";
+import { Plus, Calendar, Filter, Construction, CalendarCheck, Wrench } from "lucide-react";
 import { useBookings } from "@/lib/hooks/useBookings";
+import { useDashboard } from "@/lib/hooks/useDashboard";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorState from "@/components/ui/ErrorState";
 import BookingCard from "@/components/bookings/BookingCard";
+import KpiCard from "@/components/dashboard/KpiCard";
 
 const STATUS_FILTERS = [
   { value: "", label: "All" },
@@ -22,6 +24,7 @@ export default function BookingsPage() {
   const { bookings, loading, error, refetch } = useBookings(
     statusFilter ? { status: statusFilter } : undefined
   );
+  const { summary, loading: summaryLoading } = useDashboard();
 
   if (loading) return <LoadingState message="Loading bookings..." />;
   if (error) return <ErrorState message={error} onRetry={refetch} />;
@@ -44,6 +47,37 @@ export default function BookingsPage() {
           New Booking
         </Link>
       </div>
+
+      {/* Crane & Booking KPIs */}
+      {!summaryLoading && summary && (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            title="Total Cranes"
+            value={summary.total_cranes}
+            icon={Construction}
+            color="blue"
+          />
+          <KpiCard
+            title="Available Cranes"
+            value={summary.available_cranes}
+            icon={Construction}
+            color="green"
+            subtitle="Ready for booking"
+          />
+          <KpiCard
+            title="In Repair"
+            value={summary.repair_cranes}
+            icon={Wrench}
+            color="amber"
+          />
+          <KpiCard
+            title="Active Bookings"
+            value={summary.active_bookings}
+            icon={CalendarCheck}
+            color="purple"
+          />
+        </div>
+      )}
 
       {/* Filters */}
       <div className="mb-6 flex items-center gap-3">

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import List
 
@@ -32,11 +33,13 @@ from app.services.bookings import (
 )
 from app.services.communication import (
     send_message,
+    stream_message,
     get_chat_history,
     initiate_voice_call,
     get_call_history,
 )
 from app.migrations import ensure_schema
+from app.database import SessionLocal
 
 
 # ─────────────────────────────────────────────
@@ -91,6 +94,22 @@ Base.metadata.create_all(bind=engine)
 
 # Apply idempotent schema patches for new columns on existing tables
 ensure_schema(engine)
+
+
+@app.on_event("startup")
+async def warm_llm():
+    """
+    Preload the local chat model in the background.
+
+    The first generation on a cold model takes ~15s. Doing it here keeps the
+    first user message fast. Runs in a thread so it never blocks startup, and
+    a failure is non-fatal: chat falls back to static replies.
+    """
+    import asyncio
+
+    from app.services import llm
+
+    asyncio.get_event_loop().run_in_executor(None, llm.warmup)
 
 
 # --------------------------------------------------
@@ -1030,7 +1049,12 @@ def get_cranes(db: Session = Depends(get_db)):
     for crane in cranes:
         vendor = None
         if crane.vendor_id:
-            vendor = db.query(VendorDB).filter(VendorDB.id == crane.vendor_id).first()
+            vendor_db = db.query(VendorDB).filter(VendorDB.id == crane.vendor_id).first()
+            if vendor_db is not None:
+                # CraneSummary.vendor is typed as the Vendor schema, not the
+                # VendorDB ORM model — convert explicitly rather than
+                # passing the ORM row through.
+                vendor = Vendor.model_validate(vendor_db, from_attributes=True)
 
         active_booking = (
             db.query(BookingDB)
@@ -1319,6 +1343,54 @@ def send_chat_message(
     return send_message(db, vendor_id, message, channel)
 
 
+@app.post("/chat/{vendor_id}/stream")
+def send_chat_message_stream(
+    vendor_id: int,
+    body: dict,
+):
+    """
+    Same as POST /chat/{vendor_id}, but streams the vendor's reply as
+    Server-Sent Events so the UI can render tokens as they are generated
+    instead of waiting for the full response.
+
+    Event payloads (JSON-encoded per SSE `data:` line):
+        {"type": "user_message", "message": {...}}
+        {"type": "token", "content": "..."}
+        {"type": "done", "vendor_reply": {...}, "generated_by": "llm"|"fallback"}
+        {"type": "error", "detail": "..."}
+
+    Uses its own DB session because the request-scoped `get_db` session
+    closes as soon as this function returns, before the generator (which
+    runs lazily as StreamingResponse iterates it) has done any work.
+    """
+    message = body.get("message", "").strip()
+    channel = body.get("channel", "in_app")
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    def event_source():
+        db = SessionLocal()
+        try:
+            for event in stream_message(db, vendor_id, message, channel):
+                yield f"data: {json.dumps(event)}\n\n"
+        except HTTPException as exc:
+            yield f"data: {json.dumps({'type': 'error', 'detail': exc.detail})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
+        finally:
+            db.close()
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/chat/{vendor_id}/quick-action")
 def chat_quick_action(
     vendor_id: int,
@@ -1371,6 +1443,23 @@ def get_voice_calls(
 ):
     """Get voice call history, optionally filtered by vendor."""
     return get_call_history(db, vendor_id, limit)
+
+
+# --------------------------------------------------
+# AI / LLM Status
+# --------------------------------------------------
+
+@app.get("/ai/status")
+def get_ai_status():
+    """
+    Report which engine is driving chat replies and call transcripts.
+
+    When `available` is false the app falls back to static keyword replies,
+    so chat and voice keep working without the model.
+    """
+    from app.services import llm
+
+    return llm.model_info()
 
 
 # --------------------------------------------------

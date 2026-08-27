@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Calendar, MapPin, Phone, CreditCard, Construction } from "lucide-react";
 import type { BookingWithCrane, BookingStatus, PaymentStatus } from "@/lib/types";
-import { payBooking, updateBookingStatus } from "@/lib/api";
+import { createPaymentOrder, verifyPayment, updateBookingStatus } from "@/lib/api";
 
 const BOOKING_STATUS_STYLES: Record<BookingStatus, string> = {
   pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300",
@@ -31,8 +31,73 @@ export default function BookingCard({ booking, onStatusChange }: BookingCardProp
   const handlePay = async () => {
     setProcessing(true);
     try {
-      await payBooking(booking.id);
-      onStatusChange();
+      const order = await createPaymentOrder(booking.id);
+
+      if (order.mode === "demo") {
+        // Demo mode — simulate payment without Razorpay popup
+        const demoPaymentId = `pay_demo_${Date.now().toString(36)}`;
+        await verifyPayment({
+          booking_id: booking.id,
+          razorpay_order_id: order.order_id,
+          razorpay_payment_id: demoPaymentId,
+          razorpay_signature: "demo_signature",
+        });
+        onStatusChange();
+      } else {
+        // Live mode — open Razorpay checkout popup
+        const options = {
+          key: order.key_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: "FleetTrack",
+          description: order.description,
+          order_id: order.order_id,
+          prefill: {
+            name: order.customer_name,
+            contact: order.customer_phone,
+          },
+          theme: { color: "#2563eb" },
+          handler: async (response: {
+            razorpay_order_id: string;
+            razorpay_payment_id: string;
+            razorpay_signature: string;
+          }) => {
+            try {
+              await verifyPayment({
+                booking_id: booking.id,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              onStatusChange();
+            } catch {
+              alert("Payment verification failed. Please contact support.");
+            } finally {
+              setProcessing(false);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              setProcessing(false);
+            },
+          },
+        };
+
+        // Load Razorpay script if needed
+        if (!(window as unknown as Record<string, unknown>).Razorpay) {
+          const script = document.createElement("script");
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.onload = () => {
+            const rzp = new ((window as unknown as Record<string, unknown>).Razorpay as new (opts: unknown) => { open: () => void })(options);
+            rzp.open();
+          };
+          document.body.appendChild(script);
+        } else {
+          const rzp = new ((window as unknown as Record<string, unknown>).Razorpay as new (opts: unknown) => { open: () => void })(options);
+          rzp.open();
+        }
+        return; // Don't setProcessing(false) — modal handles it
+      }
     } catch {
       alert("Payment failed. Please try again.");
     } finally {

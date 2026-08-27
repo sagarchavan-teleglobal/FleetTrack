@@ -470,3 +470,59 @@ export interface AiStatus {
 export async function getAiStatus(): Promise<AiStatus> {
   return fetchApi<AiStatus>("/ai/status");
 }
+
+// ─────────────────────────────────────────────
+// Payments (Razorpay)
+// ─────────────────────────────────────────────
+
+export interface PaymentConfig {
+  key_id: string;
+  live_mode: boolean;
+  currency: string;
+}
+
+export interface RazorpayOrder {
+  order_id: string;
+  amount: number;
+  amount_display: number;
+  currency: string;
+  booking_id: number;
+  key_id: string;
+  mode: "live" | "demo";
+  customer_name: string;
+  customer_phone: string;
+  description: string;
+}
+
+export interface PaymentVerification {
+  booking_id: number;
+  payment_status: string;
+  booking_status: string;
+  payment_reference: string;
+  amount: number;
+  message: string;
+  mode: string;
+}
+
+export async function getPaymentConfig(): Promise<PaymentConfig> {
+  return fetchApi<PaymentConfig>("/payments/config");
+}
+
+export async function createPaymentOrder(bookingId: number): Promise<RazorpayOrder> {
+  return fetchApi<RazorpayOrder>("/payments/create-order", {
+    method: "POST",
+    body: JSON.stringify({ booking_id: bookingId }),
+  });
+}
+
+export async function verifyPayment(data: {
+  booking_id: number;
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+}): Promise<PaymentVerification> {
+  return fetchApi<PaymentVerification>("/payments/verify", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}

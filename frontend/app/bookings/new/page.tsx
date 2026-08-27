@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarCheck, CreditCard, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
-import { getAvailableCranes, createBooking, payBooking } from "@/lib/api";
-import type { Equipment, Booking, PaymentResult } from "@/lib/types";
+import { getAvailableCranes, createBooking, createPaymentOrder, verifyPayment } from "@/lib/api";
+import type { Equipment, Booking } from "@/lib/types";
+import type { PaymentVerification } from "@/lib/api";
 
 type Step = "dates" | "crane" | "details" | "payment" | "success";
 
@@ -22,7 +23,7 @@ export default function NewBookingPage() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [siteAddress, setSiteAddress] = useState("");
   const [booking, setBooking] = useState<Booking | null>(null);
-  const [paymentResult, setPaymentResult] = useState<PaymentResult | null>(null);
+  const [paymentResult, setPaymentResult] = useState<PaymentVerification | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -85,7 +86,7 @@ export default function NewBookingPage() {
     }
   };
 
-  // Step 4: Mock payment
+  // Step 4: Razorpay checkout
   const handlePayment = async () => {
     if (!booking) return;
 
@@ -93,9 +94,78 @@ export default function NewBookingPage() {
     setError("");
 
     try {
-      const result = await payBooking(booking.id);
-      setPaymentResult(result);
-      setStep("success");
+      // Create order on backend
+      const order = await createPaymentOrder(booking.id);
+
+      if (order.mode === "demo") {
+        // Demo mode: simulate Razorpay checkout without the SDK
+        // Generate fake payment credentials that the backend will accept
+        const demoPaymentId = `pay_demo_${Date.now().toString(36)}`;
+
+        const result = await verifyPayment({
+          booking_id: booking.id,
+          razorpay_order_id: order.order_id,
+          razorpay_payment_id: demoPaymentId,
+          razorpay_signature: "demo_signature",
+        });
+
+        setPaymentResult(result);
+        setStep("success");
+      } else {
+        // Live mode: open Razorpay checkout popup
+        const options = {
+          key: order.key_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: "FleetTrack",
+          description: order.description,
+          order_id: order.order_id,
+          prefill: {
+            name: order.customer_name,
+            contact: order.customer_phone,
+          },
+          theme: { color: "#2563eb" },
+          handler: async (response: {
+            razorpay_order_id: string;
+            razorpay_payment_id: string;
+            razorpay_signature: string;
+          }) => {
+            // Verify on backend
+            try {
+              const result = await verifyPayment({
+                booking_id: booking.id,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              setPaymentResult(result);
+              setStep("success");
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Payment verification failed");
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              setLoading(false);
+            },
+          },
+        };
+
+        // Load Razorpay script if not already loaded
+        if (!(window as unknown as Record<string, unknown>).Razorpay) {
+          const script = document.createElement("script");
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.onload = () => {
+            const rzp = new ((window as unknown as Record<string, unknown>).Razorpay as new (opts: unknown) => { open: () => void })(options);
+            rzp.open();
+          };
+          document.body.appendChild(script);
+        } else {
+          const rzp = new ((window as unknown as Record<string, unknown>).Razorpay as new (opts: unknown) => { open: () => void })(options);
+          rzp.open();
+        }
+        return; // Don't set loading=false — the modal handles it
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payment failed");
     } finally {
@@ -333,7 +403,7 @@ export default function NewBookingPage() {
 
             <div className="rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-3 text-sm text-yellow-700 dark:text-yellow-300">
               <CreditCard className="inline-block h-4 w-4 mr-1" />
-              This is a mock payment. No real charge will be made.
+              Razorpay integration ready. Currently in demo mode — no real charges. Add API keys to enable live payments.
             </div>
 
             <div className="flex gap-3">
@@ -348,7 +418,7 @@ export default function NewBookingPage() {
                 disabled={loading}
                 className="flex-1 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
               >
-                {loading ? "Processing..." : `Pay ₹${booking.amount.toLocaleString("en-IN")}`}
+                {loading ? "Processing..." : `Pay ₹${booking.amount.toLocaleString("en-IN")} via Razorpay`}
               </button>
             </div>
           </div>

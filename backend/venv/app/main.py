@@ -38,6 +38,11 @@ from app.services.communication import (
     initiate_voice_call,
     get_call_history,
 )
+from app.services.payment import (
+    get_config as get_payment_config,
+    create_order as create_payment_order,
+    verify_payment,
+)
 from app.migrations import ensure_schema
 from app.database import SessionLocal
 
@@ -1307,6 +1312,79 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         pending_payments=pending_payments,
         revenue_collected=float(revenue),
     )
+
+
+# --------------------------------------------------
+# Payments (Razorpay)
+# --------------------------------------------------
+
+@app.get("/payments/config")
+def get_payments_config():
+    """
+    Return payment gateway config for the frontend.
+    Tells the frontend whether to use real Razorpay or demo mode.
+    """
+    return get_payment_config()
+
+
+@app.post("/payments/create-order")
+def create_razorpay_order(
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a Razorpay order for a booking.
+    Body: { "booking_id": 123 }
+
+    Returns order details needed by the Razorpay checkout popup.
+    """
+    booking_id = body.get("booking_id")
+    if not booking_id:
+        raise HTTPException(status_code=400, detail="booking_id is required")
+
+    return create_payment_order(db, booking_id)
+
+
+@app.post("/payments/verify")
+def verify_razorpay_payment(
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    Verify payment after Razorpay checkout completes.
+    Body: {
+        "booking_id": 123,
+        "razorpay_order_id": "order_...",
+        "razorpay_payment_id": "pay_...",
+        "razorpay_signature": "..."
+    }
+    """
+    required = ["booking_id", "razorpay_order_id", "razorpay_payment_id", "razorpay_signature"]
+    for field in required:
+        if not body.get(field):
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    return verify_payment(
+        db=db,
+        booking_id=body["booking_id"],
+        razorpay_order_id=body["razorpay_order_id"],
+        razorpay_payment_id=body["razorpay_payment_id"],
+        razorpay_signature=body["razorpay_signature"],
+    )
+
+
+@app.post("/payments/webhook")
+async def razorpay_webhook(request):
+    """
+    Razorpay webhook endpoint. Configure in Razorpay Dashboard > Webhooks.
+    Events: payment.captured, payment.failed, order.paid, etc.
+    """
+    from starlette.requests import Request
+
+    body = await request.json()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    from app.services.payment import handle_webhook
+    return handle_webhook(body, signature)
 
 
 # --------------------------------------------------

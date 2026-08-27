@@ -440,49 +440,65 @@ def get_chat_history(
 _FALLBACK_CALLS = [
     {
         "transcript": (
-            "AI: Hello, this is FleetTrack calling regarding crane CR-003 at Hinjewadi Phase 3. "
-            "Can you provide a status update?\n"
-            "Vendor: Yes, the crane is operational. We completed morning inspection. "
-            "Currently lifting steel beams on the 5th floor.\n"
-            "AI: Thank you. Any maintenance concerns?\n"
-            "Vendor: The hydraulic fluid needs top-up by end of week. I'll arrange it.\n"
-            "AI: Noted. Thank you for the update. Goodbye."
+            "AI: Hello, this is FleetTrack calling. Am I speaking with the crane owner?\n"
+            "Vendor: Yes, speaking.\n"
+            "AI: Sir, I'm calling regarding Crawler Crane Gamma, CR-003, currently booked for Metro Construction Corp at Hinjewadi Phase 3. Can you give me a status update? Is the crane operational?\n"
+            "Vendor: Yes, crane is running fine. We completed the morning inspection, currently lifting steel beams on the 5th floor.\n"
+            "AI: Good to hear. Any mechanical issues or maintenance needs we should be aware of?\n"
+            "Vendor: Hydraulic fluid needs a top-up by end of this week. I'll arrange it from my side.\n"
+            "AI: Noted, thank you. Is the work on track to complete by the booking end date?\n"
+            "Vendor: Yes, should finish on schedule. No delays expected.\n"
+            "AI: Perfect. Thank you for the update sir, I'll log this in our system. Have a good day.\n"
+            "Vendor: Thank you, bye."
         ),
         "summary": (
-            "Crane operational at Hinjewadi Phase 3. Currently lifting steel on 5th floor. "
-            "Hydraulic fluid top-up needed by week end — vendor will arrange."
+            "Crane: Crawler Crane Gamma (CR-003)\n"
+            "Status: Operational\n"
+            "Update: Crane running smoothly at Hinjewadi Phase 3, lifting steel beams on 5th floor.\n"
+            "Issues: Hydraulic fluid top-up needed by end of week\n"
+            "Action Items: Vendor will arrange hydraulic fluid top-up"
         ),
-        "duration": 47,
+        "duration": 55,
     },
     {
         "transcript": (
-            "AI: Hi, calling from FleetTrack. We need a status update on the crane assigned to your site.\n"
-            "Vendor: Sure. The crane finished work early today. We're packing up. "
-            "Will resume tomorrow at 7 AM.\n"
-            "AI: Understood. Any issues to report?\n"
-            "Vendor: No issues. All running smoothly.\n"
-            "AI: Great, thank you. Have a good evening."
+            "AI: Hello, this is FleetTrack. Am I speaking with the crane owner?\n"
+            "Vendor: Yes, go ahead.\n"
+            "AI: Sir, calling about your crane that's currently in repair status. Can you update me on the repair progress?\n"
+            "Vendor: The hydraulic cylinder was replaced yesterday. We're running tests today. Should be ready by tomorrow evening.\n"
+            "AI: That's good. Any other parts that need attention while it's in the workshop?\n"
+            "Vendor: We're also checking the cable drum. Might need a cable replacement but I'll confirm after inspection.\n"
+            "AI: Understood. Please keep us posted once it's back to operational. Thank you sir.\n"
+            "Vendor: Will do. I'll call once it's ready."
         ),
         "summary": (
-            "Crane work completed early for the day. Resuming tomorrow at 7 AM. "
-            "No issues reported."
+            "Crane: Hydraulic Crane Delta (CR-004)\n"
+            "Status: Under Repair\n"
+            "Update: Hydraulic cylinder replaced, running tests today. Expected back online by tomorrow evening.\n"
+            "Issues: Cable drum under inspection, may need cable replacement\n"
+            "Action Items: Vendor to confirm once crane is operational"
         ),
-        "duration": 32,
+        "duration": 48,
     },
     {
         "transcript": (
-            "AI: Hello, this is an automated call from FleetTrack. "
-            "We noticed the crane GPS signal dropped. Is everything okay?\n"
-            "Vendor: Oh yes, we moved it inside the basement for underground work. "
-            "GPS won't work there. It'll be back above ground by 4 PM.\n"
-            "AI: Got it. We'll suppress the GPS alert until then. Thank you.\n"
+            "AI: Hello, this is FleetTrack calling. Am I speaking with the crane owner?\n"
+            "Vendor: Yes, this is speaking. How can I help?\n"
+            "AI: Sir, we noticed the GPS signal on your crane dropped earlier today. Is everything okay with the equipment?\n"
+            "Vendor: Oh yes, we moved it to the basement level for some underground structural work. GPS won't work there.\n"
+            "AI: Understood. When do you expect it to be back above ground?\n"
+            "Vendor: Should be done with the basement work by 4 PM today. Signal will be back after that.\n"
+            "AI: No problem, we'll note that in our system so no false alerts are triggered. Thank you sir.\n"
             "Vendor: Thanks for checking."
         ),
         "summary": (
-            "GPS signal lost because crane moved to basement for underground work. "
-            "Will be above ground by 4 PM. GPS alert can be suppressed."
+            "Crane: Tower Crane Alpha (CR-001)\n"
+            "Status: Operational\n"
+            "Update: GPS signal lost due to basement-level work. Crane will be above ground by 4 PM.\n"
+            "Issues: None - GPS drop is expected due to location\n"
+            "Action Items: Suppress GPS alert until 4 PM"
         ),
-        "duration": 28,
+        "duration": 42,
     },
 ]
 
@@ -500,22 +516,39 @@ def _generate_call_transcript(
 
     fleet_context = _build_vendor_context(db, vendor)
 
-    transcript_prompt = f"""You are writing a realistic transcript of a short phone call between an AI assistant and a crane rental vendor in Pune, India.
+    transcript_prompt = f"""You are writing a realistic transcript of a phone call between an AI voice agent and a crane rental vendor in Pune, India.
 
-The AI assistant works for FleetTrack, a fleet management system. It is calling {vendor.name} of {vendor.company} for a routine status update on their crane.
+The AI voice agent works for FleetTrack, a fleet management system. It is calling {vendor.name} of {vendor.company} ({vendor.phone}) for a routine status update.
 
 {fleet_context}
 
-Write the transcript with these rules:
-- Alternate lines prefixed exactly "AI:" and "Vendor:".
-- 6 to 8 lines total.
-- The AI opens by identifying itself and naming a specific crane from the list above.
-- The vendor gives a concrete operational update: what the crane is doing, where, and any issue.
-- Include one realistic detail such as a maintenance need, a delay, or a schedule change.
-- The AI closes politely.
-- Plain text only. No markdown, no stage directions, no commentary.
+CALL SCRIPT — the AI agent follows this structure:
 
-Output only the transcript lines."""
+1. OPENING: The AI identifies itself as FleetTrack, confirms it is speaking with {vendor.name}, and states which crane it is calling about (pick one from the list above that has an active booking or is in an interesting state like repair).
+
+2. OPERATIONAL STATUS: The AI asks if the crane is operational and working as expected.
+
+3. WORK PROGRESS: The AI asks what work is currently being done and if there is a progress update.
+
+4. ISSUES / MAINTENANCE: The AI asks about any mechanical issues, maintenance needs, or concerns.
+
+5. TIMELINE: If the crane has an active booking, the AI asks if work is on track to complete by the end date.
+
+6. CLOSING: The AI thanks the vendor and says it will log the update in the system.
+
+VENDOR RESPONSES should be:
+- Professional but natural — a busy site owner giving brief, honest answers
+- Include one concrete detail: a specific task being done, a part that needs attention, or a schedule note
+- Occasionally mention a minor issue or upcoming need (hydraulic check, cable inspection, operator shift change)
+
+FORMAT RULES:
+- Alternate lines prefixed exactly "AI:" and "Vendor:" — no other prefixes or labels
+- 8 to 12 lines total (4 to 6 exchanges)
+- Plain text only. No markdown, no stage directions, no asterisks, no commentary
+- The AI is polite and professional, addresses vendor as "sir" or by name
+- Keep total call feel around 60-90 seconds of real speech
+
+Output only the transcript lines, nothing else."""
 
     transcript = llm.chat(
         system_prompt="You write concise, realistic phone call transcripts.",
@@ -533,19 +566,24 @@ Output only the transcript lines."""
     transcript = transcript.strip()
 
     summary = llm.chat(
-        system_prompt="You summarise phone calls for a fleet operations log.",
+        system_prompt="You summarise phone calls for a fleet operations log. Be structured and concise.",
         messages=[
             {
                 "role": "user",
                 "content": (
-                    "Summarise this call in 1 to 2 sentences. State the crane's current "
-                    "status and any action item. Plain text only, no preamble.\n\n"
+                    "Summarise this call in a structured format:\n"
+                    "- Crane: [name and ID]\n"
+                    "- Status: [Operational / Under Repair / Idle]\n"
+                    "- Update: [1-2 sentence summary of what was discussed]\n"
+                    "- Issues: [None / brief description]\n"
+                    "- Action Items: [any follow-ups needed, or None]\n\n"
+                    "Plain text only, no markdown, no preamble. Just the summary lines.\n\n"
                     f"{transcript}"
                 ),
             }
         ],
         temperature=0.3,
-        max_tokens=120,
+        max_tokens=200,
     )
 
     if not summary:

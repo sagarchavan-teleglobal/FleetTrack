@@ -37,6 +37,7 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
     },
     ...options,
   });
@@ -389,7 +390,10 @@ export async function streamChatMessage(
 ): Promise<void> {
   const response = await fetch(`${BASE_URL}/chat/${vendorId}/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
     body: JSON.stringify({ message, channel }),
     signal,
   });

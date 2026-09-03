@@ -338,6 +338,7 @@ export interface VoiceCall {
   vendor_name: string;
   vendor_phone: string;
   direction: string;
+  /** initiated | in_progress | completed | failed */
   call_status: string;
   duration_seconds: number;
   transcript: string | null;
@@ -345,6 +346,14 @@ export interface VoiceCall {
   external_call_id: string | null;
   initiated_at: string;
   completed_at: string | null;
+  /**
+   * How the call content was produced:
+   *   live_call — a real outbound call was placed via the telephony service
+   *   llm       — transcript generated locally by the model
+   *   fallback  — canned transcript (model unavailable)
+   * Only present on the response that initiates a call.
+   */
+  generated_by?: "live_call" | "llm" | "fallback";
 }
 
 export async function getChatHistory(vendorId: number): Promise<ChatMessage[]> {

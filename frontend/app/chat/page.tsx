@@ -41,6 +41,7 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [calling, setCalling] = useState(false);
   const [callResult, setCallResult] = useState<VoiceCall | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
   const [callHistory, setCallHistory] = useState<VoiceCall[]>([]);
   const [showCallPanel, setShowCallPanel] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -79,6 +80,7 @@ export default function ChatPage() {
       .then(setCallHistory)
       .catch(() => setCallHistory([]));
     setCallResult(null);
+    setCallError(null);
     setShowCallPanel(false);
   }, [selectedVendor]);
 
@@ -171,14 +173,31 @@ export default function ChatPage() {
     setCalling(true);
     setShowCallPanel(true);
     setCallResult(null);
+    setCallError(null);
 
     try {
-      // Simulate ringing delay
-      await new Promise((r) => setTimeout(r, 2000));
+      // Brief pause so the ringing state is visible rather than flashing past.
+      await new Promise((r) => setTimeout(r, 1500));
       const result = await callVendor(selectedVendor.id);
-      setCallResult(result);
-      setCallHistory((prev) => [result, ...prev]);
-    } catch {}
+
+      if (result.call_status === "failed") {
+        // Telephony service accepted the request but reported a failure.
+        setCallError(
+          "The voice channel is busy right now. The vendor could not be reached — please try again in a moment."
+        );
+      } else {
+        setCallResult(result);
+        setCallHistory((prev) => [result, ...prev]);
+      }
+    } catch {
+      // Covers service unreachable, timeout, and backend errors alike. The
+      // specific cause isn't actionable for the user, so show one clear
+      // message rather than leaking a stack trace or failing silently.
+      setCallError(
+        "The voice channel is busy right now. Please try again in a moment."
+      );
+    }
+
     setCalling(false);
   };
 

@@ -16,11 +16,13 @@ generation with a real outbound call and store the provider's call SID in
 """
 
 import logging
+import os
 import random
 import uuid
 from datetime import datetime
 from typing import Generator
 
+import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -28,6 +30,22 @@ from app.db_models import BookingDB, ChatMessageDB, EquipmentDB, VendorDB, Voice
 from app.services import llm
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------
+# External voice-call service (real AI outbound calls)
+# --------------------------------------------------
+#
+# When VOICE_CALL_SERVICE_URL is set, the "Call Vendor" action places a real
+# outbound AI phone call through this service instead of generating a mock
+# transcript locally. The service dials the vendor, runs the conversation,
+# and (in a full integration) reports the transcript back via webhook.
+#
+# Set VOICE_CALL_SERVICE_URL to the /call/initiate endpoint, e.g.
+#   http://3.92.238.46:8002/call/initiate
+
+VOICE_CALL_SERVICE_URL = os.getenv("VOICE_CALL_SERVICE_URL", "")
+VOICE_CALL_TIMEOUT = 30
 
 
 # --------------------------------------------------
@@ -214,7 +232,7 @@ def _generate_vendor_reply(
         system_prompt=_vendor_system_prompt(vendor, fleet_context),
         messages=history,
         temperature=0.8,
-        max_tokens=150,
+        max_tokens=256,
     )
 
     if reply:
@@ -362,7 +380,7 @@ def stream_message(
         system_prompt=_vendor_system_prompt(vendor, fleet_context),
         messages=history,
         temperature=0.8,
-        max_tokens=150,
+        max_tokens=256,
     ):
         accumulated += piece
         yield {"type": "token", "content": piece}
@@ -600,6 +618,110 @@ Output only the transcript lines, nothing else."""
     return transcript, summary, duration, "llm"
 
 
+def _pick_call_context(db: Session, vendor: VendorDB) -> dict:
+    """
+    Choose the most relevant crane + booking to talk about on a call.
+
+    Preference order:
+      1. A crane with an active/confirmed booking (most to discuss)
+      2. Any crane the vendor owns
+      3. Nothing (generic fallback fields)
+
+    Returns the fields the external voice service expects.
+    """
+
+    cranes = (
+        db.query(EquipmentDB)
+        .filter(EquipmentDB.vendor_id == vendor.id)
+        .all()
+    )
+
+    chosen_crane = None
+    chosen_booking = None
+
+    for crane in cranes:
+        booking = (
+            db.query(BookingDB)
+            .filter(
+                BookingDB.crane_id == crane.id,
+                BookingDB.booking_status.in_(["confirmed", "active"]),
+            )
+            .first()
+        )
+        if booking is not None:
+            chosen_crane = crane
+            chosen_booking = booking
+            break
+
+    if chosen_crane is None and cranes:
+        chosen_crane = cranes[0]
+
+    if chosen_crane is None:
+        # Vendor owns no cranes — still give the service usable defaults.
+        return {
+            "crane_name": "your crane",
+            "crane_id": "",
+            "booking_status": "a routine status check",
+            "client_site": vendor.company,
+            "end_date": "the scheduled date",
+        }
+
+    if chosen_booking is not None:
+        booking_status = "an active booking to lift heavy equipment at your site"
+        client_site = chosen_booking.site_address or vendor.company
+        end_date = chosen_booking.end_date.strftime("%d %b %Y")
+    else:
+        booking_status = f"currently {chosen_crane.lifecycle_status}"
+        client_site = vendor.company
+        end_date = "not scheduled"
+
+    return {
+        "crane_name": chosen_crane.name,
+        "crane_id": chosen_crane.id,
+        "booking_status": booking_status,
+        "client_site": client_site,
+        "end_date": end_date,
+    }
+
+
+def _place_real_call(vendor: VendorDB, context: dict) -> dict | None:
+    """
+    Place a real outbound AI call via the external voice service.
+
+    Returns the service's JSON response on success, or None on any failure
+    (so the caller can fall back to a locally generated transcript).
+    """
+
+    if not VOICE_CALL_SERVICE_URL:
+        return None
+
+    payload = {
+        "phone_number": vendor.phone,
+        "vendor_name": vendor.name,
+        "crane_name": context["crane_name"],
+        "crane_id": context["crane_id"],
+        "booking_status": context["booking_status"],
+        "client_site": context["client_site"],
+        "end_date": context["end_date"],
+    }
+
+    try:
+        response = requests.post(
+            VOICE_CALL_SERVICE_URL,
+            json=payload,
+            timeout=VOICE_CALL_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    except requests.RequestException as exc:
+        logger.warning("Voice call service request failed: %s", exc)
+        return None
+    except ValueError as exc:
+        logger.warning("Voice call service returned non-JSON: %s", exc)
+        return None
+
+
 def initiate_voice_call(
     db: Session,
     vendor_id: int,
@@ -607,16 +729,78 @@ def initiate_voice_call(
     """
     Run an AI voice call to a vendor.
 
-    The conversation is generated by the local LLM; the telephony leg is
-    mocked. To go live: replace `_generate_call_transcript` with a Twilio or
-    Bland.ai outbound call, persist the provider call SID in
-    `external_call_id`, and update the record from the provider's completion
-    webhook.
+    If VOICE_CALL_SERVICE_URL is configured, places a real outbound AI phone
+    call through that service. Otherwise (or if the service is unreachable),
+    falls back to a locally LLM-generated transcript so the demo never breaks.
     """
 
     vendor = db.query(VendorDB).filter(VendorDB.id == vendor_id).first()
     if vendor is None:
         raise HTTPException(status_code=404, detail="Vendor not found")
+
+    # Try a real call first when the service is configured.
+    if VOICE_CALL_SERVICE_URL:
+        context = _pick_call_context(db, vendor)
+        service_result = _place_real_call(vendor, context)
+
+        if service_result is not None:
+            now = datetime.utcnow()
+
+            # The service may return a call id / status under various keys;
+            # pull them defensively and keep the raw response in the transcript
+            # field until a completion webhook delivers the real transcript.
+            external_id = (
+                service_result.get("call_id")
+                or service_result.get("call_sid")
+                or service_result.get("id")
+                or f"CALL-{uuid.uuid4().hex[:10].upper()}"
+            )
+            service_status = service_result.get("status", "initiated")
+
+            call = VoiceCallDB(
+                vendor_id=vendor_id,
+                direction="outbound",
+                call_status="in_progress" if service_status != "failed" else "failed",
+                duration_seconds=0,
+                transcript=(
+                    f"Live AI call placed to {vendor.phone} regarding "
+                    f"{context['crane_name']} ({context['crane_id']}). "
+                    f"Call status: {service_status}. "
+                    "Transcript will be available after the call completes."
+                ),
+                summary=(
+                    f"Outbound AI call initiated to {vendor.name} about "
+                    f"{context['crane_name']}. Awaiting completion."
+                ),
+                external_call_id=str(external_id),
+                initiated_at=now,
+                completed_at=None,
+            )
+
+            db.add(call)
+            db.commit()
+            db.refresh(call)
+
+            return {
+                "id": call.id,
+                "vendor_id": call.vendor_id,
+                "vendor_name": vendor.name,
+                "vendor_phone": vendor.phone,
+                "direction": call.direction,
+                "call_status": call.call_status,
+                "duration_seconds": call.duration_seconds,
+                "transcript": call.transcript,
+                "summary": call.summary,
+                "external_call_id": call.external_call_id,
+                "initiated_at": call.initiated_at.isoformat(),
+                "completed_at": None,
+                "generated_by": "live_call",
+            }
+
+        # Service configured but unreachable — fall through to mock below.
+        logger.info(
+            "Voice call service unreachable; falling back to generated transcript"
+        )
 
     transcript, summary, duration, source = _generate_call_transcript(db, vendor)
 

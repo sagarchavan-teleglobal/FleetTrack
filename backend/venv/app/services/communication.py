@@ -684,16 +684,21 @@ def _pick_call_context(db: Session, vendor: VendorDB) -> dict:
     }
 
 
-def _place_real_call(vendor: VendorDB, context: dict) -> dict | None:
+def _place_real_call(vendor: VendorDB, context: dict) -> dict:
     """
     Place a real outbound AI call via the external voice service.
 
-    Returns the service's JSON response on success, or None on any failure
-    (so the caller can fall back to a locally generated transcript).
+    Returns the service's JSON response. Raises HTTPException(503) on any
+    failure — there is no local fallback, so a failure here means the call
+    genuinely could not be placed and the caller/UI should report the voice
+    channel as unavailable.
     """
 
     if not VOICE_CALL_SERVICE_URL:
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail="Voice calling is not configured (VOICE_CALL_SERVICE_URL unset).",
+        )
 
     payload = {
         "phone_number": vendor.phone,
@@ -716,10 +721,16 @@ def _place_real_call(vendor: VendorDB, context: dict) -> dict | None:
 
     except requests.RequestException as exc:
         logger.warning("Voice call service request failed: %s", exc)
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail="The voice channel is busy right now. Please try again in a moment.",
+        )
     except ValueError as exc:
         logger.warning("Voice call service returned non-JSON: %s", exc)
-        return None
+        raise HTTPException(
+            status_code=502,
+            detail="The voice service returned an unexpected response.",
+        )
 
 
 def initiate_voice_call(
@@ -727,95 +738,57 @@ def initiate_voice_call(
     vendor_id: int,
 ) -> dict:
     """
-    Run an AI voice call to a vendor.
+    Place a real outbound AI voice call to a vendor via the external voice
+    service.
 
-    If VOICE_CALL_SERVICE_URL is configured, places a real outbound AI phone
-    call through that service. Otherwise (or if the service is unreachable),
-    falls back to a locally LLM-generated transcript so the demo never breaks.
+    No local fallback: if the service is not configured or the call cannot be
+    placed, this raises an HTTPException so the UI reports the voice channel
+    as unavailable. The generated-transcript path has been removed.
+
+    The transcript is not available synchronously — it is filled in later when
+    the voice service reports call completion (via the /voice/calls/{id}
+    webhook). The record is created in an in_progress state.
     """
 
     vendor = db.query(VendorDB).filter(VendorDB.id == vendor_id).first()
     if vendor is None:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    # Try a real call first when the service is configured.
-    if VOICE_CALL_SERVICE_URL:
-        context = _pick_call_context(db, vendor)
-        service_result = _place_real_call(vendor, context)
+    context = _pick_call_context(db, vendor)
 
-        if service_result is not None:
-            now = datetime.utcnow()
-
-            # The service may return a call id / status under various keys;
-            # pull them defensively and keep the raw response in the transcript
-            # field until a completion webhook delivers the real transcript.
-            external_id = (
-                service_result.get("call_id")
-                or service_result.get("call_sid")
-                or service_result.get("id")
-                or f"CALL-{uuid.uuid4().hex[:10].upper()}"
-            )
-            service_status = service_result.get("status", "initiated")
-
-            call = VoiceCallDB(
-                vendor_id=vendor_id,
-                direction="outbound",
-                call_status="in_progress" if service_status != "failed" else "failed",
-                duration_seconds=0,
-                transcript=(
-                    f"Live AI call placed to {vendor.phone} regarding "
-                    f"{context['crane_name']} ({context['crane_id']}). "
-                    f"Call status: {service_status}. "
-                    "Transcript will be available after the call completes."
-                ),
-                summary=(
-                    f"Outbound AI call initiated to {vendor.name} about "
-                    f"{context['crane_name']}. Awaiting completion."
-                ),
-                external_call_id=str(external_id),
-                initiated_at=now,
-                completed_at=None,
-            )
-
-            db.add(call)
-            db.commit()
-            db.refresh(call)
-
-            return {
-                "id": call.id,
-                "vendor_id": call.vendor_id,
-                "vendor_name": vendor.name,
-                "vendor_phone": vendor.phone,
-                "direction": call.direction,
-                "call_status": call.call_status,
-                "duration_seconds": call.duration_seconds,
-                "transcript": call.transcript,
-                "summary": call.summary,
-                "external_call_id": call.external_call_id,
-                "initiated_at": call.initiated_at.isoformat(),
-                "completed_at": None,
-                "generated_by": "live_call",
-            }
-
-        # Service configured but unreachable — fall through to mock below.
-        logger.info(
-            "Voice call service unreachable; falling back to generated transcript"
-        )
-
-    transcript, summary, duration, source = _generate_call_transcript(db, vendor)
+    # Raises HTTPException(503/502) on any failure — no fallback.
+    service_result = _place_real_call(vendor, context)
 
     now = datetime.utcnow()
+
+    # The service returns identifiers under various keys depending on provider.
+    external_id = (
+        service_result.get("call_sid")
+        or service_result.get("call_id")
+        or service_result.get("id")
+        or f"CALL-{uuid.uuid4().hex[:10].upper()}"
+    )
+    service_status = str(service_result.get("status", "initiated"))
+    failed = service_status.lower() in ("failed", "error")
 
     call = VoiceCallDB(
         vendor_id=vendor_id,
         direction="outbound",
-        call_status="completed",
-        duration_seconds=duration,
-        transcript=transcript,
-        summary=summary,
-        external_call_id=f"CALL-{uuid.uuid4().hex[:10].upper()}",
+        call_status="failed" if failed else "in_progress",
+        duration_seconds=0,
+        transcript=(
+            f"Live AI call placed to {vendor.phone} regarding "
+            f"{context['crane_name']} ({context['crane_id']}). "
+            f"Provider status: {service_status}. "
+            "Transcript will be available once the call completes."
+        ),
+        summary=(
+            f"Outbound AI call to {vendor.name} about "
+            f"{context['crane_name']} — awaiting completion."
+        ),
+        external_call_id=str(external_id),
         initiated_at=now,
-        completed_at=now,
+        completed_at=None,
     )
 
     db.add(call)
@@ -834,8 +807,8 @@ def initiate_voice_call(
         "summary": call.summary,
         "external_call_id": call.external_call_id,
         "initiated_at": call.initiated_at.isoformat(),
-        "completed_at": call.completed_at.isoformat() if call.completed_at else None,
-        "generated_by": source,
+        "completed_at": None,
+        "generated_by": "live_call",
     }
 
 

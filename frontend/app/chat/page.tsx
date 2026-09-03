@@ -399,48 +399,65 @@ export default function ChatPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
-            {calling && !callResult && (
+            {/* Ringing — request in flight */}
+            {calling && (
               <div className="text-center py-8">
                 <PhoneCall className="mx-auto h-10 w-10 text-green-500 animate-pulse" />
                 <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
-                  Calling {selectedVendor?.name}...
+                  Placing call to {selectedVendor?.name}...
                 </p>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                   {selectedVendor?.phone}
                 </p>
                 <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
-                  AI agent is speaking with the vendor and transcribing
+                  Connecting the AI voice agent to the vendor
                 </p>
               </div>
             )}
 
-            {callResult && (
+            {/* Failure — voice channel unavailable */}
+            {!calling && callError && (
+              <div className="text-center py-8">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                  <Phone className="h-5 w-5 text-red-500" />
+                </div>
+                <p className="mt-3 text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Call could not be placed
+                </p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 px-2">
+                  {callError}
+                </p>
+                <button
+                  onClick={handleCall}
+                  className="mt-4 rounded-lg bg-green-600 px-4 py-2 text-xs font-medium text-white hover:bg-green-700 transition-colors"
+                >
+                  Retry Call
+                </button>
+              </div>
+            )}
+
+            {/* Call placed — live, transcript arrives after completion */}
+            {!calling && callResult && (
               <div className="space-y-4">
                 <div className="text-center">
                   <div className="inline-flex items-center gap-2 rounded-full bg-green-100 dark:bg-green-900/30 px-3 py-1 text-sm text-green-700 dark:text-green-300">
-                    <Phone className="h-3.5 w-3.5" />
-                    Call Completed
+                    <PhoneCall className="h-3.5 w-3.5" />
+                    Call In Progress
                   </div>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    Duration: {callResult.duration_seconds}s • ID: {callResult.external_call_id}
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                    The AI agent is now calling {callResult.vendor_name} at {callResult.vendor_phone}.
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                    Call ID: {callResult.external_call_id}
                   </p>
                 </div>
 
-                {callResult.summary && (
-                  <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3">
-                    <p className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">Summary</p>
-                    <p className="text-sm text-blue-800 dark:text-blue-200">{callResult.summary}</p>
-                  </div>
-                )}
-
-                {callResult.transcript && (
-                  <div>
-                    <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Transcript</p>
-                    <div className="rounded-lg bg-gray-50 dark:bg-gray-700/50 p-3 text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                      {callResult.transcript}
-                    </div>
-                  </div>
-                )}
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3">
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    The transcript and summary will appear in the call history once
+                    the call completes.
+                  </p>
+                </div>
               </div>
             )}
 

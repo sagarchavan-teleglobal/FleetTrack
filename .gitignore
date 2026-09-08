@@ -22,3 +22,6 @@ frontend/.next/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local secrets (copy from secrets.example.ps1, never commit)
+secrets.local.ps1

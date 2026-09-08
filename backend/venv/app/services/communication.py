@@ -36,15 +36,21 @@ logger = logging.getLogger(__name__)
 # External voice-call service (real AI outbound calls)
 # --------------------------------------------------
 #
-# When VOICE_CALL_SERVICE_URL is set, the "Call Vendor" action places a real
-# outbound AI phone call through this service instead of generating a mock
-# transcript locally. The service dials the vendor, runs the conversation,
-# and (in a full integration) reports the transcript back via webhook.
+# The "Call Vendor" action places a real outbound AI phone call through this
+# service. The service dials the vendor, runs the conversation, and (in a full
+# integration) reports the transcript back via webhook.
 #
-# Set VOICE_CALL_SERVICE_URL to the /call/initiate endpoint, e.g.
-#   http://3.92.238.46:8002/call/initiate
+# There is no local/mock fallback: if this service is unreachable or errors,
+# the call fails with a 503 and the UI reports the voice channel as busy.
+#
+# The default below is the live POC service. Override with the
+# VOICE_CALL_SERVICE_URL environment variable to point at a different host,
+# or set it to an empty string to disable voice calling entirely.
 
-VOICE_CALL_SERVICE_URL = os.getenv("VOICE_CALL_SERVICE_URL", "")
+VOICE_CALL_SERVICE_URL = os.getenv(
+    "VOICE_CALL_SERVICE_URL",
+    "http://3.92.238.46:8002/call/initiate",
+)
 VOICE_CALL_TIMEOUT = 30
 
 

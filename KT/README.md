@@ -38,6 +38,28 @@ These are the formal handover artifacts, also in this folder.
 
 ---
 
+## File formats
+
+Every document in this folder is provided in **two formats**:
+
+- **`.docx`** (Microsoft Word) — for reading, printing, and sharing with
+  stakeholders. These are the handover deliverables.
+- **`.md`** (Markdown) — the source of truth, diff-friendly and versioned in git.
+
+If you edit a `.md` file, regenerate the Word versions with:
+
+```powershell
+cd KT
+..\backend\venv\Scripts\python.exe convert-to-docx.py
+```
+
+That script (`convert-to-docx.py`) converts every `.md` in this folder to a
+matching `.docx`, preserving headings, tables, code blocks, and the ASCII
+architecture diagrams. It needs `python-docx` (already installed in
+`backend/venv`; otherwise `pip install python-docx`).
+
+---
+
 ## Quick Facts
 
 | Item | Value |

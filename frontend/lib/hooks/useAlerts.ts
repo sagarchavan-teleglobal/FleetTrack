@@ -19,6 +19,13 @@ export interface AlertCount {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// When the API is reached through an ngrok tunnel, ngrok intercepts
+// browser-looking requests and answers with its own HTML warning page -
+// using HTTP 200, so `res.ok` is true and `res.json()` then throws. This
+// header opts out of that interstitial. `lib/api.ts` sends it on every
+// call; these hooks use bare fetch, so they must send it too.
+const API_HEADERS = { "ngrok-skip-browser-warning": "true" };
+
 export function useAlerts(pollInterval = 10000) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [count, setCount] = useState<AlertCount>({ total: 0, unacknowledged: 0 });
@@ -28,8 +35,8 @@ export function useAlerts(pollInterval = 10000) {
   const fetchAlerts = useCallback(async () => {
     try {
       const [alertsRes, countRes] = await Promise.all([
-        fetch(`${BASE_URL}/alerts?limit=50`),
-        fetch(`${BASE_URL}/alerts/count`),
+        fetch(`${BASE_URL}/alerts?limit=50`, { headers: API_HEADERS }),
+        fetch(`${BASE_URL}/alerts/count`, { headers: API_HEADERS }),
       ]);
 
       if (alertsRes.ok) {
@@ -58,6 +65,7 @@ export function useAlerts(pollInterval = 10000) {
     try {
       await fetch(`${BASE_URL}/alerts/${alertId}/acknowledge`, {
         method: "PATCH",
+        headers: API_HEADERS,
       });
       fetchAlerts();
     } catch {}
@@ -67,6 +75,7 @@ export function useAlerts(pollInterval = 10000) {
     try {
       await fetch(`${BASE_URL}/alerts/acknowledge-all`, {
         method: "PATCH",
+        headers: API_HEADERS,
       });
       fetchAlerts();
     } catch {}

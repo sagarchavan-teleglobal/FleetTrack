@@ -11,6 +11,10 @@ export interface Geofence {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Opt out of ngrok's HTML warning interstitial, which is served with
+// HTTP 200 and would otherwise make `res.json()` throw. See useAlerts.ts.
+const API_HEADERS = { "ngrok-skip-browser-warning": "true" };
+
 export function useGeofences() {
   const [geofences, setGeofences] = useState<Geofence[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +22,9 @@ export function useGeofences() {
 
   const fetchGeofences = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE_URL}/geofences`);
+      const res = await fetch(`${BASE_URL}/geofences`, {
+        headers: API_HEADERS,
+      });
       if (res.ok) {
         const data = await res.json();
         setGeofences(data);
@@ -39,7 +45,7 @@ export function useGeofences() {
     const polygonStr = JSON.stringify(polygon);
     const res = await fetch(
       `${BASE_URL}/geofences?name=${encodeURIComponent(name)}&polygon=${encodeURIComponent(polygonStr)}`,
-      { method: "POST" }
+      { method: "POST", headers: API_HEADERS }
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -49,7 +55,10 @@ export function useGeofences() {
   }, [fetchGeofences]);
 
   const deleteGeofence = useCallback(async (id: number) => {
-    await fetch(`${BASE_URL}/geofences/${id}`, { method: "DELETE" });
+    await fetch(`${BASE_URL}/geofences/${id}`, {
+      method: "DELETE",
+      headers: API_HEADERS,
+    });
     fetchGeofences();
   }, [fetchGeofences]);
 

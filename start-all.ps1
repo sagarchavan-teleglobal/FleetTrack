@@ -233,7 +233,13 @@ if (-not $SkipNgrok) {
     } else {
         $ngrokExe = Get-Command ngrok -ErrorAction SilentlyContinue
         if ($ngrokExe) {
-            Start-Process powershell -ArgumentList "-NoExit", "-Command", "ngrok http 8000 --log=stdout" -WorkingDirectory $root -WindowStyle Minimized
+            # Pin the account's reserved domain so the public URL survives
+            # restarts. Without this, ngrok assigns a random hostname each
+            # time and the Vercel NEXT_PUBLIC_API_URL has to be updated and
+            # redeployed after every start.
+            $ngrokDomain = "underwent-mothball-abreast.ngrok-free.dev"
+            $ngrokCmd = "ngrok http 8000 --url=$ngrokDomain --log=stdout"
+            Start-Process powershell -ArgumentList "-NoExit", "-Command", $ngrokCmd -WorkingDirectory $root -WindowStyle Minimized
             Start-Sleep -Seconds 6
             try {
                 $tunnels = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5).tunnels

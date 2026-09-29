@@ -433,8 +433,19 @@ def receive_telemetry(
 )
 def get_telemetry_history(
     equipment_id: str,
+    limit: int = Query(default=1000, le=10000),
     db: Session = Depends(get_db)
 ):
+    """
+    Telemetry history for one machine, oldest-first.
+
+    Returns the most recent `limit` rows (then re-sorted ascending), so
+    callers that only need a recent window - map trails, charts - do not
+    pull the entire history. This table grows by one row per device every
+    few seconds: unbounded, it reached 24k rows / 5 MB per machine, which
+    is what exhausted the tunnel's monthly bandwidth. Pass an explicit
+    small limit when you only need the last few points.
+    """
 
     records = (
         db.query(TelemetryDB)
@@ -442,8 +453,9 @@ def get_telemetry_history(
             TelemetryDB.equipment_id == equipment_id
         )
         .order_by(
-            TelemetryDB.timestamp.asc()
+            TelemetryDB.timestamp.desc()
         )
+        .limit(limit)
         .all()
     )
 
@@ -452,6 +464,10 @@ def get_telemetry_history(
             status_code=404,
             detail="No telemetry found for equipment"
         )
+
+    # Restore ascending order, which is the contract callers expect
+    # (e.g. taking the tail of the list to get the newest points).
+    records.reverse()
 
     return records
 

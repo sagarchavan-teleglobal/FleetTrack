@@ -82,10 +82,22 @@ export async function deleteEquipment(id: string): Promise<void> {
 // Telemetry endpoints
 // ─────────────────────────────────────────────
 
+/**
+ * Telemetry history for one machine, oldest-first.
+ *
+ * Pass `limit` when you only need a recent window. The table grows
+ * continuously (tens of thousands of rows per machine), so an unbounded
+ * request can be several MB - enough to exhaust a tunnel's bandwidth quota
+ * when polled. The backend caps at 1000 rows by default.
+ */
 export async function getEquipmentTelemetry(
-  equipmentId: string
+  equipmentId: string,
+  limit?: number
 ): Promise<TelemetryRecord[]> {
-  return fetchApi<TelemetryRecord[]>(`/equipment/${equipmentId}/telemetry`);
+  const qs = limit ? `?limit=${limit}` : "";
+  return fetchApi<TelemetryRecord[]>(
+    `/equipment/${equipmentId}/telemetry${qs}`
+  );
 }
 
 // ─────────────────────────────────────────────

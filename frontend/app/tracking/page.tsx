@@ -38,17 +38,28 @@ export default function TrackingPage() {
   const loading = eqLoading || devLoading;
   const error = eqError || devError;
 
+  // Which machines to draw trails for. Derived as a stable string so that
+  // `fetchTrails` keeps its identity across position updates: `equipment`
+  // is a fresh array on every poll, and depending on it directly made the
+  // effect below tear down and refetch every few seconds instead of every
+  // 15s - re-downloading every trail each time.
+  const trailEquipmentIds = equipment.map((eq) => eq.id).join(",");
+
   // Fetch trails when toggled on
   const fetchTrails = useCallback(async () => {
-    if (equipment.length === 0) return;
+    const ids = trailEquipmentIds ? trailEquipmentIds.split(",") : [];
+    if (ids.length === 0) return;
+
     setTrailsLoading(true);
     const result: Record<string, TelemetryRecord[]> = {};
 
-    for (const eq of equipment) {
+    // Only the newest TRAIL_POINTS rows are drawn, so only fetch those.
+    // Requesting the full history here was pulling ~5 MB per machine.
+    const TRAIL_POINTS = 50;
+
+    for (const id of ids) {
       try {
-        const data = await getEquipmentTelemetry(eq.id);
-        // Take last 50 points for the trail
-        result[eq.id] = data.slice(-50);
+        result[id] = await getEquipmentTelemetry(id, TRAIL_POINTS);
       } catch {
         // No telemetry yet
       }
@@ -56,7 +67,7 @@ export default function TrackingPage() {
 
     setTrails(result);
     setTrailsLoading(false);
-  }, [equipment]);
+  }, [trailEquipmentIds]);
 
   useEffect(() => {
     if (showTrails) {

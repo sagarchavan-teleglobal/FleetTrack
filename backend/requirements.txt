@@ -1,0 +1,30 @@
+# FleetTrack backend - runtime dependencies
+#
+# Pinned to the versions currently running in backend/venv.
+# Install with:
+#     pip install -r requirements.txt
+#
+# Test-only dependencies live in requirements-dev.txt.
+
+# Web framework / ASGI server
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+# Required by uvicorn to serve the /ws/telemetry WebSocket endpoint.
+websockets==17.0.1
+
+# Database
+SQLAlchemy==2.0.52
+psycopg2-binary==2.9.12
+
+# Validation / schemas
+pydantic==2.13.4
+
+# Outbound HTTP: Groq chat completions (app/services/llm.py), Ollama
+# fallback, and the voice-call service (app/services/communication.py).
+requests==2.34.2
+
+# Payments. Imported lazily in app/services/payment.py::_get_client,
+# so it is only needed when RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are
+# set. Kept here because live mode fails without it.
+razorpay==2.0.1

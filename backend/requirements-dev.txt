@@ -1,0 +1,11 @@
+# FleetTrack backend - development / test dependencies
+#
+# Installs the runtime set plus the test tooling:
+#     pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Test suite (backend/tests/test_api.py)
+pytest==9.1.1
+# httpx is the HTTP client used by the tests to hit the running API.
+httpx==0.28.1
